@@ -80,11 +80,10 @@ This creates `%USERPROFILE%\Downloads\Musico-Release\Musico-Setup.exe`,
 `Musico-Windows-x64.zip`, and the matching SHA-256 file in the same folder. The
 single setup EXE contains the verified app bundle and installs without needing
 another download. A tagged GitHub Actions build publishes the setup EXE and
-package to a release. Before tagging a release, add a restricted
-`YOUTUBE_API_KEY` GitHub Actions secret; the key is injected at build time and
-is never stored in source. Local builds without `YOUTUBE_API_KEY` disable
-YouTube search and show a setup error when search is requested. Restrict the key
-to the required Google API and quota.
+package to a release. Windows YouTube search uses the `yt-dlp` and Deno files
+bundled by the installer, so it does not need a manually supplied API key.
+Android builds continue to use InnerTube search and need `YOUTUBE_API_KEY`
+passed at build time.
 
 To publish an update, attach both `Musico-Windows-x64.zip` and
 `Musico-Windows-x64.zip.sha256` to a GitHub Release in

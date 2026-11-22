@@ -26,13 +26,7 @@ jobs:
 
       - name: Build installer and release bundle
         shell: pwsh
-        env:
-          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:YOUTUBE_API_KEY)) {
-            throw 'Add a restricted YOUTUBE_API_KEY repository secret before publishing a release.'
-          }
-          .\installer\build_musico_release.ps1 -OutputDirectory "$env:RUNNER_TEMP\Musico-Release"
+        run: .\installer\build_musico_release.ps1 -OutputDirectory "$env:RUNNER_TEMP\Musico-Release"
 
       - name: Publish GitHub release assets
         shell: pwsh

@@ -15,7 +15,6 @@ import '../widgets/musico_widgets.dart';
 import '../widgets/configured_downloads_dialog.dart';
 import '../widgets/spotify_playlist_section.dart';
 import '../widgets/youtube_download_dialog.dart';
-import '../widgets/youtube_metadata_dialog.dart';
 
 class MusicScreen extends StatefulWidget {
   const MusicScreen({
@@ -41,10 +40,7 @@ class _MusicScreenState extends State<MusicScreen> {
       children: [
         Padding(
           padding: EdgeInsets.fromLTRB(wide ? 34 : 20, 20, wide ? 34 : 20, 0),
-          child: _Header(
-            onOpenCatalog: widget.onOpenCatalog,
-            appState: widget.appState,
-          ),
+          child: _Header(appState: widget.appState),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
@@ -498,9 +494,8 @@ class _LibraryContent extends StatelessWidget {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.onOpenCatalog, required this.appState});
+  const _Header({required this.appState});
 
-  final VoidCallback onOpenCatalog;
   final AppState appState;
 
   @override
@@ -550,11 +545,19 @@ class _Header extends StatelessWidget {
           children: [
             Expanded(child: title),
             const SizedBox(width: 14),
-            if (!compact)
+            if (compact)
+              IconButton.filledTonal(
+                tooltip: 'Download from YouTube',
+                onPressed: () =>
+                    showYouTubeDownloadDialog(context, appState: appState),
+                icon: const Icon(Icons.download_rounded),
+              )
+            else
               OutlinedButton.icon(
-                onPressed: onOpenCatalog,
-                icon: const Icon(Icons.library_music_outlined, size: 17),
-                label: const Text('Free music'),
+                onPressed: () =>
+                    showYouTubeDownloadDialog(context, appState: appState),
+                icon: const Icon(Icons.download_rounded, size: 17),
+                label: const Text('Download'),
               ),
             const SizedBox(width: 8),
             if (compact)
@@ -569,73 +572,6 @@ class _Header extends StatelessWidget {
                 icon: const Icon(Icons.add_rounded, size: 18),
                 label: const Text('Import audio'),
               ),
-            PopupMenuButton<String>(
-              tooltip: 'More music options',
-              onSelected: (value) {
-                if (value == 'free') onOpenCatalog();
-                if (value == 'video') appState.pickVideoFiles();
-                if (value == 'spotify') {
-                  importSpotifyPlaylistMetadata(context, appState);
-                }
-                if (value == 'youtube-metadata') {
-                  showYouTubeMetadataDialog(context, appState: appState);
-                }
-                if (value == 'youtube-download') {
-                  showYouTubeDownloadDialog(context, appState: appState);
-                }
-                if (value == 'configured') {
-                  showConfiguredDownloadsDialog(
-                    context,
-                    appState: appState,
-                    category: MediaDownloadCategory.music,
-                  );
-                }
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                  value: 'free',
-                  child: ListTile(
-                    leading: Icon(Icons.library_music_outlined),
-                    title: Text('Find free music'),
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'video',
-                  child: ListTile(
-                    leading: Icon(Icons.video_library_outlined),
-                    title: Text('Add videos'),
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'spotify',
-                  child: ListTile(
-                    leading: Icon(Icons.playlist_add_rounded),
-                    title: Text('Import Spotify playlist metadata'),
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'youtube-download',
-                  child: ListTile(
-                    leading: Icon(Icons.music_video_outlined),
-                    title: Text('Download from YouTube'),
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'youtube-metadata',
-                  child: ListTile(
-                    leading: Icon(Icons.info_outline_rounded),
-                    title: Text('Look up YouTube metadata'),
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'configured',
-                  child: ListTile(
-                    leading: Icon(Icons.download_rounded),
-                    title: Text('Download from my links'),
-                  ),
-                ),
-              ],
-            ),
           ],
         );
       },

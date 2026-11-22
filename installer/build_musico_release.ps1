@@ -64,11 +64,7 @@ if (-not $SkipFlutterBuild) {
   if (-not (Test-Path -LiteralPath $flutterPath -PathType Leaf)) {
     throw 'Flutter was not found. Install Flutter or add flutter.bat to PATH.'
   }
-  $dartDefines = @()
-  if (-not [string]::IsNullOrWhiteSpace($env:YOUTUBE_API_KEY)) {
-    $dartDefines += "--dart-define=YOUTUBE_API_KEY=$env:YOUTUBE_API_KEY"
-  }
-  & $flutterPath build windows --release @dartDefines
+  & $flutterPath build windows --release
   if ($LASTEXITCODE -ne 0) {
     throw "Flutter Windows release build failed with exit code $LASTEXITCODE."
   }
