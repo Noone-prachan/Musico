@@ -1,0 +1,62 @@
+name: musico
+description: A native offline music player and anime release tracker.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.14.0
+  flutter: ">=3.50.0"
+
+dependencies:
+  archive: ^4.7.1
+  audio_service: ^0.18.19
+  material_ui: ^1.11.1
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  connectivity_plus: ^7.3.2
+  ffmpeg_kit_flutter_new_audio: 2.6.2
+  file_picker: ^13.4.0
+  flutter_local_notifications: ^23.0.3
+  flutter_timezone: ^5.1.1
+  http: ^1.6.0
+  just_audio: ^0.10.6
+  just_audio_background: ^0.0.1-beta.17
+  just_audio_windows: ^0.2.3
+  media_kit: ^1.2.6
+  media_kit_libs_video: ^1.0.7
+  media_kit_video: ^2.0.1
+  path_provider: ^2.1.6
+  shared_preferences: ^2.5.6
+  timezone: ^0.11.2
+  youtube_explode_dart: ^3.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - config/media_downloads.json
+    - assets/images/musico_mark.png
+  fonts:
+    - family: Space Grotesk
+      fonts:
+        - asset: assets/fonts/SpaceGrotesk-Light.ttf
+          weight: 300
+        - asset: assets/fonts/SpaceGrotesk-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/SpaceGrotesk-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/SpaceGrotesk-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/SpaceGrotesk-Bold.ttf
+          weight: 700
+    - family: IBM Plex Mono
+      fonts:
+        - asset: assets/fonts/IBMPlexMono-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/IBMPlexMono-Medium.ttf
+          weight: 500

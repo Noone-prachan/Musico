@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 1,
+  "downloads": {
+    "music": [
+      {
+        "id": "mozart-rondo-alla-turca",
+        "title": "Rondo Alla Turca",
+        "artist": "Wolfgang Amadeus Mozart",
+        "url": "https://archive.org/download/100ClassicalMusicMasterpieces/1778%20Rondo%20Alla%20Turca%2C%20from%20Piano%20Sonata%20in%20A.mp3",
+        "rights": "public_domain",
+        "attribution": "Wolfgang Amadeus Mozart — 100 Classical Music Masterpieces via Internet Archive"
+      },
+      {
+        "id": "jelly-roll-king-porter",
+        "title": "King Porter",
+        "artist": "Jelly Roll Morton's Red Hot Peppers",
+        "url": "https://archive.org/download/78_king-porter_jelly-roll-morton-his-red-hot-peppers_gbia0011504b/78_king-porter_jelly-roll-morton-his-red-hot-peppers_gbia0011504b_01_1.4_eq.mp3",
+        "rights": "public_domain",
+        "attribution": "Jelly Roll Morton's Red Hot Peppers, 1924 — Great 78 Project via Internet Archive"
+      },
+      {
+        "id": "wikimedia-example-ogg",
+        "title": "Example Sound (Ogg Vorbis)",
+        "artist": "Wikimedia Commons",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/3/3f/Example_sound_file_in_Ogg_Vorbis_format.ogg",
+        "rights": "cc0",
+        "attribution": "Wikimedia Commons — CC0 1.0 Universal"
+      },
+      {
+        "id": "bach-cello-suite-1-prelude",
+        "title": "Cello Suite No. 1 in G Major, Prelude",
+        "artist": "Johann Sebastian Bach",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/9/9d/Suite_for_Solo_Cello_No._1_in_G_Major%2C_BWV_1007_-_I._Pr%C3%A9lude.ogg",
+        "rights": "public_domain",
+        "attribution": "Johann Sebastian Bach — Wikimedia Commons, public domain recording"
+      },
+      {
+        "id": "beethoven-moonlight-sonata",
+        "title": "Piano Sonata No. 14 (Moonlight) — Op. 27 No. 2",
+        "artist": "Ludwig van Beethoven",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/3/35/Beethoven_-_Moonlight_Sonata_Op_27_No2_Mov1_Mus%C3%A9_de_l%27Homme.ogg",
+        "rights": "public_domain",
+        "attribution": "Ludwig van Beethoven — Wikimedia Commons, public domain recording"
+      },
+      {
+        "id": "chopin-nocturne-op9-no2",
+        "title": "Nocturne in E-flat Major, Op. 9 No. 2",
+        "artist": "Frédéric Chopin",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/9/96/Chopin_-_Nocturne_Op._9_No._2.ogg",
+        "rights": "public_domain",
+        "attribution": "Frédéric Chopin — Wikimedia Commons, public domain recording"
+      },
+      {
+        "id": "debussy-clair-de-lune",
+        "title": "Clair de Lune",
+        "artist": "Claude Debussy",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/4/4c/Claude_Debussy_-_Clair_de_lune_%28Suite_Bergamasque%2C_L._75%29.ogg",
+        "rights": "public_domain",
+        "attribution": "Claude Debussy — Wikimedia Commons, public domain recording"
+      },
+      {
+        "id": "bach-minuet-g-major",
+        "title": "Minuet in G Major, BWV Anh. 114",
+        "artist": "Johann Sebastian Bach",
+        "url": "https://upload.wikimedia.org/wikipedia/commons/2/27/Minuet_in_G_major_D._S._Borwick.ogg",
+        "rights": "public_domain",
+        "attribution": "Johann Sebastian Bach — Wikimedia Commons, public domain recording"
+      }
+    ],
+    "video": [
+      {
+        "id": "big-buck-bunny-512kb",
+        "title": "Big Buck Bunny",
+        "url": "https://archive.org/download/BigBuckBunny_328/BigBuckBunny_512kb.mp4",
+        "rights": "cc_by",
+        "attribution": "Blender Foundation — Blender Institute (2008). Licensed CC BY 3.0.",
+        "licenseUrl": "https://creativecommons.org/licenses/by/3.0/"
+      },
+      {
+        "id": "sintel-512kb",
+        "title": "Sintel",
+        "url": "https://archive.org/download/Sintel/sintel-2048-stereo_512kb.mp4",
+        "rights": "cc_by",
+        "attribution": "Blender Foundation — Durian Open Movie Project (2010). Licensed CC BY 3.0.",
+        "licenseUrl": "https://creativecommons.org/licenses/by/3.0/"
+      },
+      {
+        "id": "tears-of-steel",
+        "title": "Tears of Steel",
+        "url": "https://archive.org/download/tears-of-steel/tears_of_steel_720p.mp4",
+        "rights": "cc_by",
+        "attribution": "Blender Foundation — Mango Open Movie Project (2012). Licensed CC BY 3.0.",
+        "licenseUrl": "https://creativecommons.org/licenses/by/3.0/"
+      },
+      {
+        "id": "cosmos-laundromat-preview",
+        "title": "Cosmos Laundromat (Preview)",
+        "url": "https://archive.org/download/cosmos-laundromat/Cosmos_Laundromat_-_First_Cycle_-_Official_Blender_Foundation_release.mp4",
+        "rights": "cc_by",
+        "attribution": "Blender Foundation — Gooseberry Open Movie Project (2015). Licensed CC BY 4.0.",
+        "licenseUrl": "https://creativecommons.org/licenses/by/4.0/"
+      }
+    ],
+    "anime": [
+      {
+        "id": "elephants-dream-web",
+        "title": "Elephants Dream",
+        "url": "https://archive.org/download/ElephantsDream/ed_1024_512kb.mp4",
+        "rights": "cc_by",
+        "attribution": "Blender Foundation — Orange Open Movie Project (2006). Licensed CC BY 2.5.",
+        "licenseUrl": "https://creativecommons.org/licenses/by/2.5/"
+      },
+      {
+        "id": "glass-half",
+        "title": "Glass Half",
+        "url": "https://archive.org/download/glass-half/glass-half.mp4",
+        "rights": "cc_by",
+        "attribution": "Blender Foundation — Licensed CC BY 4.0.",
+        "licenseUrl": "https://creativecommons.org/licenses/by/4.0/"
+      },
+      {
+        "id": "sprite-fright",
+        "title": "Sprite Fright",
+        "url": "https://archive.org/download/sprite-fright/Sprite_Fright_-_Blender_Open_Movie.mp4",
+        "rights": "cc_by",
+        "attribution": "Blender Foundation — Blender Studio (2021). Licensed CC BY 4.0.",
+        "licenseUrl": "https://creativecommons.org/licenses/by/4.0/"
+      }
+    ]
+  }
+}
