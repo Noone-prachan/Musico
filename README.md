@@ -127,7 +127,9 @@ flutter test
   can play offline.
 - Lyrics are looked up automatically when connected to the internet. Musico sends
   the track title and artist to LRCLIB; it does not upload the audio or video.
-  Lyrics may be unavailable for some tracks.
+  When LRCLIB provides timestamps, the current line follows playback in the
+  lyrics preview and full lyrics view. Plain lyrics remain available when
+  timestamps are not provided.
 - Configured links do not scrape web pages, extract streaming-service media, or
   bypass DRM. YouTube and known streaming-service URLs are rejected by the
   *configured links* feature.

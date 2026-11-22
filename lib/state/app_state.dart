@@ -32,6 +32,7 @@ import '../services/backup_service.dart';
 import '../services/direct_media_download_service.dart';
 import '../services/lyrics_title_matcher.dart';
 import '../services/openverse_artwork_service.dart';
+import '../services/synced_lyrics_parser.dart';
 import '../services/youtube_download_service.dart';
 import '../services/youtube_metadata_service.dart';
 import '../services/youtube_search_service.dart';
@@ -187,6 +188,7 @@ class AppState extends ChangeNotifier {
   String? backupErrorMessage;
   String? lyrics;
   String? lyricsErrorMessage;
+  List<SyncedLyricLine> syncedLyricLines = [];
   String? videoErrorMessage;
   LyricsStatus lyricsStatus = LyricsStatus.idle;
   bool isSearchingMusic = false;
@@ -216,6 +218,7 @@ class AppState extends ChangeNotifier {
   bool _notificationsInitialized = false;
   bool _isDisposed = false;
   DateTime? _lyricsRetryAfter;
+  int _lyricsRequestId = 0;
   MediaDownloadConfig? mediaDownloadConfig;
   String? mediaStorageRoot;
   bool setupCompleted = false;
@@ -228,6 +231,15 @@ class AppState extends ChangeNotifier {
   bool get isPlayingVideo => _videoPlayer?.state.playing ?? false;
 
   Duration get duration => player.duration ?? Duration.zero;
+
+  Duration get lyricsPlaybackPosition => currentTrack != null
+      ? player.position
+      : currentVideo != null
+      ? _videoPlayer?.state.position ?? Duration.zero
+      : Duration.zero;
+
+  int get activeLyricIndex =>
+      currentSyncedLyricIndex(syncedLyricLines, lyricsPlaybackPosition);
 
   static const musicSuggestions = [
     'piano',
@@ -1223,6 +1235,11 @@ class AppState extends ChangeNotifier {
     if (currentTrack?.id == track.id) {
       await player.stop();
       currentTrack = null;
+      _lyricsRequestId++;
+      lyrics = null;
+      lyricsErrorMessage = null;
+      syncedLyricLines = [];
+      lyricsStatus = LyricsStatus.idle;
       _scheduleWindowsMediaControlsSync();
     }
     try {
@@ -1848,6 +1865,8 @@ class AppState extends ChangeNotifier {
     try {
       await player.stop();
       currentTrack = null;
+      _lyricsRequestId++;
+      syncedLyricLines = [];
       _scheduleWindowsMediaControlsSync();
       final videoPlayer = this.videoPlayer;
       _initializeVideoPlayer();
@@ -1870,12 +1889,14 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> stopVideo() async {
+    _lyricsRequestId++;
     final videoPlayer = _videoPlayer;
     if (videoPlayer != null) await videoPlayer.stop();
     await _setPictureInPictureEnabled(false);
     currentVideo = null;
     lyrics = null;
     lyricsErrorMessage = null;
+    syncedLyricLines = [];
     lyricsStatus = LyricsStatus.idle;
     _notify();
   }
@@ -1883,11 +1904,13 @@ class AppState extends ChangeNotifier {
   Future<void> removeVideo(VideoTrack video) async {
     videoTracks = videoTracks.where((item) => item.id != video.id).toList();
     if (currentVideo?.id == video.id) {
+      _lyricsRequestId++;
       final videoPlayer = _videoPlayer;
       if (videoPlayer != null) await videoPlayer.stop();
       await _setPictureInPictureEnabled(false);
       currentVideo = null;
       lyrics = null;
+      syncedLyricLines = [];
       lyricsStatus = LyricsStatus.idle;
     }
     try {
@@ -1917,20 +1940,26 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> fetchLyricsForCurrent() async {
+    final requestId = ++_lyricsRequestId;
     final track = currentTrack;
     final video = currentVideo;
     if (track == null && video == null) {
       lyricsStatus = LyricsStatus.idle;
       lyrics = null;
       lyricsErrorMessage = null;
+      syncedLyricLines = [];
       _notify();
       return;
     }
 
     lyrics = null;
     lyricsErrorMessage = null;
+    syncedLyricLines = [];
+    lyricsStatus = LyricsStatus.loading;
+    _notify();
     try {
       final connection = await _connectivity.checkConnectivity();
+      if (requestId != _lyricsRequestId) return;
       isWifiConnected = connection.contains(ConnectivityResult.wifi);
       hasNetworkConnection = connection.any(
         (result) => result != ConnectivityResult.none,
@@ -1951,42 +1980,43 @@ class AppState extends ChangeNotifier {
                   : player.duration?.inMilliseconds ?? 0,
             )
           : _videoLyricsMetadata(video!);
-      lyricsStatus = LyricsStatus.loading;
-      _notify();
       final payload = await _findLyricsRecord(metadata);
+      if (requestId != _lyricsRequestId) return;
       if (payload == null) {
         lyricsStatus = LyricsStatus.notFound;
         return;
       }
-      final plainLyrics = payload['plainLyrics'] as String?;
-      final syncedLyrics = payload['syncedLyrics'] as String?;
-      final foundLyrics = plainLyrics?.trim().isNotEmpty == true
-          ? plainLyrics
-          : syncedLyrics
-                ?.replaceAll(RegExp(r'\[\d{2}:\d{2}(?:\.\d{2,3})?\]'), '')
-                .trim();
-      if (foundLyrics == null || foundLyrics.isEmpty) {
+      final content = parseLyricsContent(
+        plainLyrics: payload['plainLyrics'] as String?,
+        syncedLyrics: payload['syncedLyrics'] as String?,
+      );
+      if (content == null) {
+        syncedLyricLines = [];
         lyricsStatus = LyricsStatus.notFound;
         return;
       }
-      lyrics = foundLyrics;
+      lyrics = content.text;
+      syncedLyricLines = content.syncedLines;
       lyricsStatus = LyricsStatus.loaded;
     } on TimeoutException catch (error, stackTrace) {
+      if (requestId != _lyricsRequestId) return;
       debugPrint('Automatic lyrics lookup timed out: $error\n$stackTrace');
       lyricsErrorMessage = 'The lyrics request timed out. Check your internet connection and try again.';
       lyricsStatus = LyricsStatus.error;
     } on SocketException catch (error, stackTrace) {
+      if (requestId != _lyricsRequestId) return;
       debugPrint(
         'Automatic lyrics lookup could not reach the service: $error\n$stackTrace',
       );
       lyricsErrorMessage = 'Could not reach the lyrics service. Check your internet connection and retry.';
       lyricsStatus = LyricsStatus.error;
     } on Object catch (error, stackTrace) {
+      if (requestId != _lyricsRequestId) return;
       debugPrint('Automatic lyrics lookup failed: $error\n$stackTrace');
       lyricsErrorMessage = error is HttpException ? error.message : 'Lyrics could not be loaded. Check your internet connection and retry.';
       lyricsStatus = LyricsStatus.error;
     } finally {
-      _notify();
+      if (requestId == _lyricsRequestId) _notify();
     }
   }
 
@@ -3568,7 +3598,9 @@ class AppState extends ChangeNotifier {
       }
       currentTrack = null;
       currentVideo = null;
+      _lyricsRequestId++;
       lyrics = null;
+      syncedLyricLines = [];
       lyricsStatus = LyricsStatus.idle;
       tracks = restoredTracks;
       videoTracks = restoredVideos;

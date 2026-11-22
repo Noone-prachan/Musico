@@ -9,6 +9,7 @@ import '../models/media_download.dart';
 import '../models/music_playlist.dart';
 import '../models/music_track.dart';
 import '../models/video_track.dart';
+import '../services/synced_lyrics_parser.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/musico_widgets.dart';
@@ -870,13 +871,15 @@ class _LyricsPanel extends StatelessWidget {
             const SizedBox(height: 7),
           ],
           if (loaded)
-            Text(
-              appState.lyrics!,
-              maxLines: 5,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall
-                  ?.copyWith(color: MusicoPalette.softInk, height: 1.65),
-            )
+            appState.syncedLyricLines.isEmpty
+                ? Text(
+                    appState.lyrics!,
+                    maxLines: 5,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(color: MusicoPalette.softInk, height: 1.65),
+                  )
+                : _SyncedLyricsPreview(appState: appState)
           else
             Text(
               message,
@@ -909,16 +912,152 @@ class _LyricsPanel extends StatelessWidget {
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
                         const SizedBox(height: 14),
-                        SelectableText(
-                          appState.lyrics!,
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(height: 1.8),
-                        ),
+                        if (appState.syncedLyricLines.isEmpty)
+                          SelectableText(
+                            appState.lyrics!,
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(height: 1.8),
+                          )
+                        else
+                          _SyncedLyricsDocument(
+                            lines: appState.syncedLyricLines,
+                            activeIndex: appState.activeLyricIndex,
+                          ),
                       ],
                     ),
                   ),
                 ),
                 child: const Text('Read full lyrics'),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SyncedLyricsPreview extends StatelessWidget {
+  const _SyncedLyricsPreview({required this.appState});
+
+  final AppState appState;
+
+  @override
+  Widget build(BuildContext context) {
+    final lines = appState.syncedLyricLines;
+    final activeIndex = appState.activeLyricIndex;
+    const windowSize = 5;
+    final maxStart = lines.length > windowSize ? lines.length - windowSize : 0;
+    final start = activeIndex < 0
+        ? 0
+        : (activeIndex - 2).clamp(0, maxStart).toInt();
+    final end = (start + windowSize).clamp(0, lines.length).toInt();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (start > 0)
+          const Text('…', style: TextStyle(color: MusicoPalette.muted)),
+        for (var index = start; index < end; index++)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: AnimatedDefaultTextStyle(
+              duration: const Duration(milliseconds: 150),
+              style: Theme.of(context).textTheme.bodySmall!.copyWith(
+                color: index == activeIndex
+                    ? MusicoPalette.olive
+                    : MusicoPalette.softInk,
+                fontWeight: index == activeIndex
+                    ? FontWeight.w700
+                    : FontWeight.normal,
+                height: 1.65,
+              ),
+              child: Text(lines[index].text, maxLines: 2),
+            ),
+          ),
+        if (end < lines.length)
+          const Text('…', style: TextStyle(color: MusicoPalette.muted)),
+      ],
+    );
+  }
+}
+
+class _SyncedLyricsDocument extends StatefulWidget {
+  const _SyncedLyricsDocument({required this.lines, required this.activeIndex});
+
+  final List<SyncedLyricLine> lines;
+  final int activeIndex;
+
+  @override
+  State<_SyncedLyricsDocument> createState() => _SyncedLyricsDocumentState();
+}
+
+class _SyncedLyricsDocumentState extends State<_SyncedLyricsDocument> {
+  late List<GlobalKey> _lineKeys;
+
+  @override
+  void initState() {
+    super.initState();
+    _createLineKeys();
+    _scrollToActiveLine();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SyncedLyricsDocument oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final linesChanged = oldWidget.lines.length != widget.lines.length;
+    if (linesChanged) _createLineKeys();
+    if (linesChanged || oldWidget.activeIndex != widget.activeIndex) {
+      _scrollToActiveLine();
+    }
+  }
+
+  void _createLineKeys() {
+    _lineKeys = List.generate(widget.lines.length, (_) => GlobalKey());
+  }
+
+  void _scrollToActiveLine() {
+    final activeIndex = widget.activeIndex;
+    if (activeIndex < 0 || activeIndex >= widget.lines.length) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || widget.activeIndex != activeIndex) return;
+      final targetContext = _lineKeys[activeIndex].currentContext;
+      if (targetContext == null) return;
+      unawaited(
+        Scrollable.ensureVisible(
+          targetContext,
+          alignment: .45,
+          duration: MediaQuery.disableAnimationsOf(targetContext)
+              ? Duration.zero
+              : const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+        ),
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SelectionArea(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (var index = 0; index < widget.lines.length; index++)
+            Padding(
+              key: _lineKeys[index],
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 150),
+                style: theme.textTheme.bodyMedium!.copyWith(
+                  color: index == widget.activeIndex
+                      ? MusicoPalette.olive
+                      : MusicoPalette.softInk,
+                  fontWeight: index == widget.activeIndex
+                      ? FontWeight.w700
+                      : FontWeight.normal,
+                  height: 1.8,
+                ),
+                child: Text(widget.lines[index].text),
               ),
             ),
         ],
