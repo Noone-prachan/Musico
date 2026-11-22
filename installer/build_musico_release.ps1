@@ -130,6 +130,7 @@ try {
     /nologo `
     /target:winexe `
     "/out:$setupExecutable" `
+    "/resource:$outputZip,MusicoBundle.zip" `
     /reference:System.Windows.Forms.dll `
     /reference:System.Drawing.dll `
     /reference:System.IO.Compression.dll `

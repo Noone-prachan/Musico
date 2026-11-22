@@ -498,6 +498,27 @@ internal static class InstallerEngine
             Path.GetTempPath(),
             "musico-bundle-" + Guid.NewGuid().ToString("N") + ".zip"
         );
+        var embeddedBundle = Assembly
+            .GetExecutingAssembly()
+            .GetManifestResourceStream("MusicoBundle.zip");
+        if (embeddedBundle != null)
+        {
+            try
+            {
+                using (embeddedBundle)
+                using (var output = File.Create(bundlePath))
+                {
+                    embeddedBundle.CopyTo(output);
+                }
+                return bundlePath;
+            }
+            catch
+            {
+                DeleteTemporaryFile(bundlePath);
+                throw;
+            }
+        }
+
         var checksumPath = Path.Combine(
             Path.GetTempPath(),
             "musico-bundle-" + Guid.NewGuid().ToString("N") + ".sha256"

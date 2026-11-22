@@ -77,21 +77,20 @@ Build the single-file Windows installer and release bundle with:
 ```
 
 This creates `%USERPROFILE%\Downloads\Musico-Release\Musico-Setup.exe`,
-`Musico-Windows-x64.zip`, and the matching SHA-256 file in the same folder. A
-tagged GitHub Actions build publishes the setup EXE and package to a release.
-Before tagging a release, add a restricted `YOUTUBE_API_KEY` GitHub Actions
-secret; the key is injected at build time and is never stored in source. Local
-builds without `YOUTUBE_API_KEY` disable YouTube search and show a setup error
-when search is requested. Restrict the key to the required Google API and quota.
-The setup EXE downloads the ZIP from the latest public release in
-[`Noone-prachan/Musico`](https://github.com/Noone-prachan/Musico) and verifies
-its checksum before installing. The ZIP contains the complete Windows app,
-`yt-dlp.exe`, and Deno under one top-level `Musico` folder. Internet access is
-required during installation.
+`Musico-Windows-x64.zip`, and the matching SHA-256 file in the same folder. The
+single setup EXE contains the verified app bundle and installs without needing
+another download. A tagged GitHub Actions build publishes the setup EXE and
+package to a release. Before tagging a release, add a restricted
+`YOUTUBE_API_KEY` GitHub Actions secret; the key is injected at build time and
+is never stored in source. Local builds without `YOUTUBE_API_KEY` disable
+YouTube search and show a setup error when search is requested. Restrict the key
+to the required Google API and quota.
 
 To publish an update, attach both `Musico-Windows-x64.zip` and
-`Musico-Windows-x64.zip.sha256` to a GitHub Release in that repository. The
-setup defaults to `%LOCALAPPDATA%\Programs\Musico` for the app and
+`Musico-Windows-x64.zip.sha256` to a GitHub Release in
+[`Noone-prachan/Musico`](https://github.com/Noone-prachan/Musico). The ZIP
+contains the complete Windows app, `yt-dlp.exe`, and Deno under one top-level
+`Musico` folder. The setup defaults to `%LOCALAPPDATA%\Programs\Musico` for the app and
 `%USERPROFILE%\Downloads\Musico` for media storage.
 
 To make Windows Start search recognize the app, build it and install the
