@@ -922,6 +922,7 @@ class AppState extends ChangeNotifier {
   }
 
   static String _youtubeUserMessage(Object error) {
+    if (error is YouTubeSearchNotConfiguredException) return error.toString();
     if (error is HttpException) return error.message;
     if (error is FormatException) return error.message;
     if (error is ProcessException) {

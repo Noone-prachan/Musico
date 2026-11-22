@@ -11,8 +11,8 @@ void main() {
     await expectLater(
       service.search('a song'),
       throwsA(
-        isA<StateError>().having(
-          (error) => error.message,
+        isA<YouTubeSearchNotConfiguredException>().having(
+          (error) => error.toString(),
           'message',
           contains('YOUTUBE_API_KEY'),
         ),

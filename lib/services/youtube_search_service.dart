@@ -6,6 +6,15 @@ import 'package:http/http.dart' as http;
 
 import '../models/youtube_media.dart';
 
+final class YouTubeSearchNotConfiguredException implements Exception {
+  const YouTubeSearchNotConfiguredException();
+
+  @override
+  String toString() =>
+      'YouTube search is not configured for this build. '
+      'Set YOUTUBE_API_KEY when building Musico.';
+}
+
 /// Searches YouTube with the public InnerTube endpoint and returns plain
 /// `videoRenderer` results as [YouTubeSearchResult]s. This is independent of
 /// `youtube_explode_dart`'s search client, whose parsing breaks on live or
@@ -22,10 +31,7 @@ class YouTubeSearchService {
     final trimmed = query.trim();
     if (trimmed.isEmpty) return const [];
     if (_key.isEmpty) {
-      throw StateError(
-        'YouTube search is not configured for this build. '
-        'Set YOUTUBE_API_KEY when building Musico.',
-      );
+      throw const YouTubeSearchNotConfiguredException();
     }
 
     final response = await _client
