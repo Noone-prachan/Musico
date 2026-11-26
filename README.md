@@ -191,7 +191,8 @@ include the affected platform and the behavior you tested.
 
 ## License
 
-This repository does not currently contain a project-level `LICENSE` file.
-Do not assume the source code or bundled media is licensed for reuse or
-redistribution. Third-party notices remain with their respective assets and
-packages.
+Musico's original code is source-available under the
+[Musico End User License Agreement](LICENSE): personal, non-commercial use is
+permitted, but redistribution and reuse in other projects require written
+permission. This is not an OSI-approved open-source license. Third-party
+libraries, fonts, and other materials retain their own licenses and notices.
