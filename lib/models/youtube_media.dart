@@ -1,5 +1,3 @@
-/// Result of an in-app YouTube search, and the download options derived from
-/// the stream manifest for one video.
 enum YouTubeDownloadFormat { mp3, mp4 }
 
 class YouTubeSearchResult {
@@ -21,8 +19,6 @@ class YouTubeSearchResult {
 
   String get videoUrl => 'https://www.youtube.com/watch?v=$videoId';
 
-  /// Parses an InnerTube `videoRenderer` map into a search result, or returns
-  /// `null` when the entry is not a plain downloadable video.
   static YouTubeSearchResult? tryParse(Map<String, dynamic> renderer) {
     final videoId = renderer['videoId'];
     if (videoId is! String ||
@@ -86,7 +82,6 @@ class YouTubeSearchResult {
   }
 }
 
-/// A downloadable MP4 video quality, sourced from a YouTube stream manifest.
 class YouTubeQuality {
   const YouTubeQuality({
     required this.label,
@@ -98,10 +93,8 @@ class YouTubeQuality {
     required this.sizeBytes,
   });
 
-  /// Quality label as shown on YouTube, e.g. `1080p`, `720p60`.
   final String label;
 
-  /// Numeric height, used for stable sorting.
   final int height;
 
   final int itag;

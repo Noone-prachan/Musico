@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:ffmpeg_kit_flutter_new_audio/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new_audio/return_code.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import 'yt_dlp_executable_resolver.dart';
@@ -13,7 +15,6 @@ import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import '../models/youtube_download.dart';
 import '../models/youtube_media.dart';
 
-/// Final files produced for one YouTube download.
 class YouTubeDownloadOutcome {
   const YouTubeDownloadOutcome({
     required this.file,
@@ -27,32 +28,38 @@ class YouTubeDownloadOutcome {
   final int byteSize;
   final String extension;
 
-  /// JSON sidecar holding the requested name and the original video metadata.
   final File metadataFile;
   final File? artwork;
 }
 
-/// Resolves YouTube stream manifests with `youtube_explode_dart`, downloads the
-/// chosen streams with ranged requests (which avoids YouTube's plain-GET 403),
-/// and turns them into MP3 (FFmpeg + libmp3lame) or MP4 (FFmpeg `-c copy` mux).
 class YouTubeDownloadService {
-  YouTubeDownloadService({http.Client? client})
+  YouTubeDownloadService({http.Client? client, bool? isAndroid})
     : _client = client ?? http.Client(),
-      _youtube = YoutubeExplode();
+      _youtube = YoutubeExplode(),
+      _isAndroid = isAndroid ?? Platform.isAndroid;
 
   final http.Client _client;
   final YoutubeExplode _youtube;
+  final bool _isAndroid;
   final Map<String, StreamManifest> _manifests = {};
 
   static const _chunkBytes = 512 * 1024;
+  static const _androidDownloadChannel = MethodChannel(
+    'musico/youtube_download',
+  );
+  static final Map<String, void Function(double)> _androidProgressCallbacks =
+      {};
+  static bool _androidProgressHandlerInstalled = false;
+  static int _nextAndroidDownloadId = 0;
 
   void dispose() {
     _youtube.close();
     _client.close();
   }
 
-  /// MP4 qualities available for [videoId], best resolution first.
   Future<List<YouTubeQuality>> availableQualities(String videoId) async {
+    if (_isAndroid) return _availableAndroidQualities(videoId);
+
     final manifest = await _manifest(videoId);
     final seen = <String>{};
     final qualities = <YouTubeQuality>[];
@@ -79,12 +86,12 @@ class YouTubeDownloadService {
     return qualities;
   }
 
-  /// Downloads the best available audio stream and encodes it to MP3.
   Future<YouTubeDownloadOutcome> downloadAudio({
     required YouTubeRipRequest request,
     required Directory directory,
     required Directory artworkDirectory,
     required void Function(double?) onProgress,
+    required void Function(String) onStage,
   }) async {
     await directory.create(recursive: true);
     final videoId = request.videoId;
@@ -99,8 +106,15 @@ class YouTubeDownloadService {
           '${operationDirectory.path}${Platform.pathSeparator}'
           'yt_audio.%(ext)s',
         ).path;
-        onProgress(null);
-        final tempAudio = await _runYtDlpAudio(request.videoUrl, tempTemplate);
+        onStage('Downloading audio…');
+        final tempAudio = await _runYtDlpAudio(
+          request.videoUrl,
+          tempTemplate,
+          onProgress: (progress) =>
+              onProgress(progress == null ? null : progress * .72),
+        );
+        onStage('Fetching artwork…');
+        onProgress(.74);
         final artwork = await _downloadThumbnail(
           videoId,
           request.thumbnailUrl,
@@ -110,6 +124,8 @@ class YouTubeDownloadService {
           '${operationDirectory.path}${Platform.pathSeparator}'
           'download.mp3',
         );
+        onStage('Converting to MP3…');
+        onProgress(null);
         await _transcode(
           input: tempAudio.path,
           output: tempMp3.path,
@@ -129,6 +145,7 @@ class YouTubeDownloadService {
           artworkPath: artwork?.path,
         );
         final metadataFile = await metadata.writeNextTo(output);
+        onProgress(.98);
         onProgress(1);
         return YouTubeDownloadOutcome(
           file: output,
@@ -149,6 +166,16 @@ class YouTubeDownloadService {
         }
       }
     }
+    if (_isAndroid) {
+      return _downloadAndroidAudio(
+        request: request,
+        directory: directory,
+        artworkDirectory: artworkDirectory,
+        onProgress: onProgress,
+        onStage: onStage,
+      );
+    }
+    onStage('Looking up YouTube streams…');
     onProgress(null);
     final manifest = await _manifest(videoId);
     final audio = _pickAudio(manifest);
@@ -185,6 +212,7 @@ class YouTubeDownloadService {
       artworkDirectory,
     );
     final output = _uniqueFile(directory, request.safeFileName, 'mp3');
+    onStage('Converting to MP3…');
     onProgress(null);
     await _transcode(
       input: tempAudio.path,
@@ -203,6 +231,7 @@ class YouTubeDownloadService {
       artworkPath: artwork?.path,
     );
     final metadataFile = await metadata.writeNextTo(output);
+    onProgress(.98);
     onProgress(1);
     return YouTubeDownloadOutcome(
       file: output,
@@ -213,13 +242,12 @@ class YouTubeDownloadService {
     );
   }
 
-  /// Downloads the selected MP4 quality by muxing a video-only stream with the
-  /// best audio stream (no re-encode; `-c copy`).
   Future<YouTubeDownloadOutcome> downloadVideo({
     required YouTubeRipRequest request,
     required Directory directory,
     required Directory artworkDirectory,
     required void Function(double?) onProgress,
+    required void Function(String) onStage,
   }) async {
     await directory.create(recursive: true);
     final videoId = request.videoId;
@@ -237,6 +265,7 @@ class YouTubeDownloadService {
         final tempMp4 = File(
           '${operationDirectory.path}${Platform.pathSeparator}download.mp4',
         );
+        onStage('Downloading video…');
         await _runYtDlpVideo(
           request.videoUrl,
           tempMp4.path,
@@ -247,6 +276,8 @@ class YouTubeDownloadService {
         await tempMp4.copy(output.path);
         final byteSize = await output.length();
         await _deleteQuietly(tempMp4);
+        onStage('Fetching artwork…');
+        onProgress(.97);
         final artwork = await _downloadThumbnail(
           videoId,
           request.thumbnailUrl,
@@ -259,6 +290,7 @@ class YouTubeDownloadService {
           artworkPath: artwork?.path,
         );
         final metadataFile = await metadata.writeNextTo(output);
+        onProgress(.99);
         onProgress(1);
         return YouTubeDownloadOutcome(
           file: output,
@@ -279,6 +311,17 @@ class YouTubeDownloadService {
         }
       }
     }
+    if (_isAndroid) {
+      return _downloadAndroidVideo(
+        request: request,
+        directory: directory,
+        artworkDirectory: artworkDirectory,
+        qualityLabel: qualityLabel,
+        onProgress: onProgress,
+        onStage: onStage,
+      );
+    }
+    onStage('Looking up YouTube streams…');
     final manifest = await _manifest(videoId);
     final video = _pickVideo(manifest, qualityLabel);
     if (video == null) {
@@ -342,6 +385,7 @@ class YouTubeDownloadService {
     }
 
     final output = _uniqueFile(directory, request.safeFileName, 'mp4');
+    onStage('Combining video and audio…');
     onProgress(null);
     await _mux(
       videoPath: tempVideo.path,
@@ -366,6 +410,7 @@ class YouTubeDownloadService {
       artworkPath: artwork?.path,
     );
     final metadataFile = await metadata.writeNextTo(output);
+    onProgress(.99);
     return YouTubeDownloadOutcome(
       file: output,
       byteSize: byteSize,
@@ -375,7 +420,6 @@ class YouTubeDownloadService {
     );
   }
 
-  /// Picks a non-colliding `Name.ext` / `Name (1).ext` path.
   File _uniqueFile(Directory directory, String baseName, String extension) {
     var candidate = File(
       '${directory.path}${Platform.pathSeparator}$baseName.$extension',
@@ -425,7 +469,6 @@ class YouTubeDownloadService {
     final cached = _manifests[videoId];
     if (cached != null) return cached;
 
-    // 1. Try standard getManifest first with strict timeout
     try {
       final manifest = await _youtube.videos.streamsClient
           .getManifest(videoId)
@@ -438,7 +481,6 @@ class YouTubeDownloadService {
       debugPrint('Standard streamsClient.getManifest failed: $error');
     }
 
-    // 2. Fall back to clients that do not enforce strict bot checks
     final fallbackClients = [
       YoutubeApiClient.androidSdkless,
       YoutubeApiClient.androidMusic,
@@ -461,7 +503,7 @@ class YouTubeDownloadService {
       }
     }
 
-    if (lastError != null) throw lastError!;
+    if (lastError != null) throw lastError;
     throw const FormatException(
       'YouTube did not expose downloadable streams for this video. Try again shortly.',
     );
@@ -519,9 +561,12 @@ class YouTubeDownloadService {
         ));
   }
 
-  Future<File> _runYtDlpAudio(String url, String outputTemplate) async {
-    final executable = _resolveYtDlpExecutable();
-    final result = await Process.run(executable, [
+  Future<File> _runYtDlpAudio(
+    String url,
+    String outputTemplate, {
+    required void Function(double?) onProgress,
+  }) async {
+    final result = await _runYtDlp([
       '--no-playlist',
       '--no-warnings',
       '--newline',
@@ -530,15 +575,13 @@ class YouTubeDownloadService {
       '-o',
       outputTemplate,
       url,
-    ]);
+    ], onProgress: onProgress);
     if (result.exitCode != 0) {
-      final stderr = result.stderr.toString().trim();
-      final stdout = result.stdout.toString().trim();
       throw FormatException(
-        stderr.isNotEmpty
-            ? stderr.split('\n').last
-            : stdout.isNotEmpty
-            ? stdout.split('\n').last
+        result.stderr.isNotEmpty
+            ? result.stderr
+            : result.stdout.isNotEmpty
+            ? result.stdout
             : 'yt-dlp could not download this YouTube audio.',
       );
     }
@@ -572,25 +615,27 @@ class YouTubeDownloadService {
     final format = height > 0
         ? 'best[height<=?$height][ext=mp4]/best[ext=mp4]/best'
         : 'best[ext=mp4]/best';
-    final executable = _resolveYtDlpExecutable();
-    final result = await Process.run(executable, [
-      '--no-playlist',
-      '--no-warnings',
-      '--newline',
-      '-f',
-      format,
-      '-o',
-      outputPath,
-      url,
-    ]);
+    final result = await _runYtDlp(
+      [
+        '--no-playlist',
+        '--no-warnings',
+        '--newline',
+        '-f',
+        format,
+        '-o',
+        outputPath,
+        url,
+      ],
+      onProgress: (progress) {
+        if (progress != null) onProgress(progress * .98);
+      },
+    );
     if (result.exitCode != 0) {
-      final stderr = result.stderr.toString().trim();
-      final stdout = result.stdout.toString().trim();
       throw FormatException(
-        stderr.isNotEmpty
-            ? stderr.split('\n').last
-            : stdout.isNotEmpty
-            ? stdout.split('\n').last
+        result.stderr.isNotEmpty
+            ? result.stderr
+            : result.stdout.isNotEmpty
+            ? result.stdout
             : 'yt-dlp could not download this YouTube video.',
       );
     }
@@ -599,7 +644,367 @@ class YouTubeDownloadService {
         'yt-dlp finished without creating a video file.',
       );
     }
-    onProgress(1);
+    onProgress(.98);
+  }
+
+  Future<({int exitCode, String stdout, String stderr})> _runYtDlp(
+    List<String> arguments, {
+    void Function(double?)? onProgress,
+  }) async {
+    final applicationDirectory = File(Platform.resolvedExecutable).parent.path;
+    final process = await Process.start(_resolveYtDlpExecutable(), [
+      ...ytDlpRuntimeArguments(applicationDirectory: applicationDirectory),
+      ...arguments,
+    ]);
+    String stdout = '';
+    String stderr = '';
+
+    Future<void> readLines(
+      Stream<List<int>> stream,
+      void Function(String) saveLine,
+    ) async {
+      await for (final line
+          in stream
+              .transform(const Utf8Decoder(allowMalformed: true))
+              .transform(const LineSplitter())) {
+        if (line.trim().isNotEmpty) saveLine(line.trim());
+        final progress = parseYtDlpProgress(line);
+        if (progress != null) onProgress?.call(progress);
+      }
+    }
+
+    await Future.wait([
+      readLines(process.stdout, (line) => stdout = line),
+      readLines(process.stderr, (line) => stderr = line),
+    ]);
+    return (exitCode: await process.exitCode, stdout: stdout, stderr: stderr);
+  }
+
+  Future<List<YouTubeQuality>> _availableAndroidQualities(
+    String videoId,
+  ) async {
+    try {
+      final output = await _androidDownloadChannel.invokeMethod<String>(
+        'qualities',
+        {'videoUrl': 'https://www.youtube.com/watch?v=$videoId'},
+      );
+      if (output == null) {
+        throw const FormatException(
+          'Android yt-dlp returned no video quality information.',
+        );
+      }
+      return parseYtDlpQualities(output);
+    } on PlatformException catch (error) {
+      throw HttpException(
+        error.message ?? 'Android yt-dlp could not load video qualities.',
+      );
+    }
+  }
+
+  Future<YouTubeDownloadOutcome> _downloadAndroidAudio({
+    required YouTubeRipRequest request,
+    required Directory directory,
+    required Directory artworkDirectory,
+    required void Function(double?) onProgress,
+    required void Function(String) onStage,
+  }) async {
+    final operationDirectory = Directory(
+      '${directory.path}${Platform.pathSeparator}'
+      'tmp_yt_${DateTime.now().microsecondsSinceEpoch}',
+    );
+    await operationDirectory.create(recursive: true);
+    File? output;
+    try {
+      onStage('Downloading audio…');
+      final template = File(
+        '${operationDirectory.path}${Platform.pathSeparator}'
+        'yt_audio.%(ext)s',
+      ).path;
+      final sourceAudio = await _downloadAndroidYtDlpStream(
+        url: request.videoUrl,
+        outputTemplate: template,
+        formatSelector: 'bestaudio/best',
+        onProgress: (progress) =>
+            onProgress(progress == null ? null : progress * .72),
+      );
+
+      onStage('Fetching artwork…');
+      onProgress(.74);
+      final artwork = await _downloadThumbnail(
+        request.videoId,
+        request.thumbnailUrl,
+        artworkDirectory,
+      );
+      output = _uniqueFile(directory, request.safeFileName, 'mp3');
+      onStage('Converting to MP3…');
+      onProgress(null);
+      await _transcode(
+        input: sourceAudio.path,
+        output: output.path,
+        title: request.requestedName,
+        artist: request.channel,
+        artwork: artwork?.path,
+      );
+
+      final byteSize = await output.length();
+      final metadata = _metadata(
+        request,
+        mediaFile: output,
+        byteSize: byteSize,
+        artworkPath: artwork?.path,
+      );
+      final metadataFile = await metadata.writeNextTo(output);
+      onProgress(.98);
+      onProgress(1);
+      return YouTubeDownloadOutcome(
+        file: output,
+        byteSize: byteSize,
+        extension: 'mp3',
+        artwork: artwork,
+        metadataFile: metadataFile,
+      );
+    } catch (_) {
+      if (output != null) await _deleteQuietly(output);
+      rethrow;
+    } finally {
+      try {
+        if (await operationDirectory.exists()) {
+          await operationDirectory.delete(recursive: true);
+        }
+      } on FileSystemException catch (error) {
+        debugPrint(
+          'Temporary YouTube download directory could not be removed: $error',
+        );
+      }
+    }
+  }
+
+  Future<YouTubeDownloadOutcome> _downloadAndroidVideo({
+    required YouTubeRipRequest request,
+    required Directory directory,
+    required Directory artworkDirectory,
+    required String qualityLabel,
+    required void Function(double?) onProgress,
+    required void Function(String) onStage,
+  }) async {
+    final operationDirectory = Directory(
+      '${directory.path}${Platform.pathSeparator}'
+      'tmp_yt_video_${DateTime.now().microsecondsSinceEpoch}',
+    );
+    await operationDirectory.create(recursive: true);
+    File? output;
+    try {
+      final height = _height(qualityLabel);
+      if (height <= 0) {
+        throw FormatException('Unsupported video quality "$qualityLabel".');
+      }
+      final videoTemplate = File(
+        '${operationDirectory.path}${Platform.pathSeparator}'
+        'yt_video.%(ext)s',
+      ).path;
+      final audioTemplate = File(
+        '${operationDirectory.path}${Platform.pathSeparator}'
+        'yt_audio.%(ext)s',
+      ).path;
+
+      onStage('Downloading video…');
+      final video = await _downloadAndroidYtDlpStream(
+        url: request.videoUrl,
+        outputTemplate: videoTemplate,
+        formatSelector: androidVideoFormatSelector(
+          height: height,
+          formatId: request.formatId,
+        ),
+        onProgress: (progress) =>
+            onProgress(progress == null ? null : progress * .6),
+      );
+      onStage('Downloading audio…');
+      final audio = await _downloadAndroidYtDlpStream(
+        url: request.videoUrl,
+        outputTemplate: audioTemplate,
+        formatSelector: 'bestaudio[ext=m4a]/bestaudio/best[ext=m4a]/best',
+        onProgress: (progress) =>
+            onProgress(progress == null ? null : .6 + progress * .12),
+      );
+
+      output = _uniqueFile(directory, request.safeFileName, 'mp4');
+      onStage('Combining video and audio…');
+      onProgress(null);
+      await _mux(
+        videoPath: video.path,
+        audioPath: audio.path,
+        output: output.path,
+        title: request.requestedName,
+        artist: request.channel,
+      );
+
+      onStage('Fetching artwork…');
+      onProgress(.94);
+      final artwork = await _downloadThumbnail(
+        request.videoId,
+        request.thumbnailUrl,
+        artworkDirectory,
+      );
+      final byteSize = await output.length();
+      final metadata = _metadata(
+        request,
+        mediaFile: output,
+        byteSize: byteSize,
+        artworkPath: artwork?.path,
+      );
+      final metadataFile = await metadata.writeNextTo(output);
+      onProgress(.99);
+      onProgress(1);
+      return YouTubeDownloadOutcome(
+        file: output,
+        byteSize: byteSize,
+        extension: 'mp4',
+        artwork: artwork,
+        metadataFile: metadataFile,
+      );
+    } catch (_) {
+      if (output != null) await _deleteQuietly(output);
+      rethrow;
+    } finally {
+      try {
+        if (await operationDirectory.exists()) {
+          await operationDirectory.delete(recursive: true);
+        }
+      } on FileSystemException catch (error) {
+        debugPrint(
+          'Temporary YouTube download directory could not be removed: $error',
+        );
+      }
+    }
+  }
+
+  Future<File> _downloadAndroidYtDlpStream({
+    required String url,
+    required String outputTemplate,
+    required String formatSelector,
+    required void Function(double?) onProgress,
+  }) async {
+    _installAndroidProgressHandler();
+    final id =
+        '${DateTime.now().microsecondsSinceEpoch}-${_nextAndroidDownloadId++}';
+    _androidProgressCallbacks[id] = onProgress;
+    try {
+      final path = await _androidDownloadChannel.invokeMethod<String>(
+        'downloadStream',
+        {
+          'id': id,
+          'url': url,
+          'outputTemplate': outputTemplate,
+          'formatSelector': formatSelector,
+        },
+      );
+      if (path == null || path.isEmpty) {
+        throw const FormatException(
+          'Android yt-dlp finished without returning a downloaded file.',
+        );
+      }
+      return File(path);
+    } on PlatformException catch (error) {
+      throw HttpException(
+        error.message ??
+            'Android yt-dlp could not download this YouTube media.',
+      );
+    } finally {
+      _androidProgressCallbacks.remove(id);
+    }
+  }
+
+  static List<YouTubeQuality> parseYtDlpQualities(String output) {
+    final decoded = jsonDecode(output);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException(
+        'Android yt-dlp returned invalid video quality information.',
+      );
+    }
+    final formats = decoded['formats'];
+    if (formats is! List) return const [];
+
+    final byLabel = <String, YouTubeQuality>{};
+    for (final format in formats) {
+      if (format is! Map) continue;
+      final heightValue = format['height'];
+      final height = heightValue is num ? heightValue.toInt() : 0;
+      final extension = format['ext'];
+      final codec = format['vcodec'];
+      if (height <= 0 ||
+          extension is! String ||
+          extension != 'mp4' ||
+          codec is! String ||
+          codec == 'none') {
+        continue;
+      }
+
+      final frameRate = format['fps'];
+      final note = format['format_note'];
+      final label = note is String && RegExp(r'^\d+p').hasMatch(note)
+          ? note
+          : '${height}p${frameRate is num && frameRate > 30 ? frameRate.round() : ''}';
+      final formatId = format['format_id'];
+      final bitrate = format['tbr'];
+      final size = format['filesize'] ?? format['filesize_approx'];
+      final candidate = YouTubeQuality(
+        label: label,
+        height: height,
+        itag: int.tryParse(formatId?.toString() ?? '') ?? 0,
+        codec: codec,
+        container: extension,
+        bitrateKbps: bitrate is num ? bitrate.toDouble() : 0,
+        sizeBytes: size is num ? size.toInt() : 0,
+      );
+      final existing = byLabel[label];
+      if (existing == null || candidate.bitrateKbps > existing.bitrateKbps) {
+        byLabel[label] = candidate;
+      }
+    }
+    final qualities = byLabel.values.toList()
+      ..sort((a, b) {
+        final byHeight = b.height.compareTo(a.height);
+        if (byHeight != 0) return byHeight;
+        return b.bitrateKbps.compareTo(a.bitrateKbps);
+      });
+    return qualities;
+  }
+
+  static String androidVideoFormatSelector({
+    required int height,
+    int? formatId,
+  }) {
+    return [
+      if (formatId != null && formatId > 0) '$formatId',
+      'bestvideo*[height<=$height][ext=mp4]',
+      'best[height<=$height][ext=mp4]',
+      'best[ext=mp4]',
+    ].join('/');
+  }
+
+  static void _installAndroidProgressHandler() {
+    if (_androidProgressHandlerInstalled) return;
+    _androidProgressHandlerInstalled = true;
+    _androidDownloadChannel.setMethodCallHandler((call) async {
+      if (call.method != 'progress' || call.arguments is! Map) {
+        throw PlatformException(
+          code: 'invalid_download_progress',
+          message: 'Android yt-dlp sent an invalid progress update.',
+        );
+      }
+      final arguments = call.arguments as Map;
+      final id = arguments['id'];
+      final progress = arguments['progress'];
+      if (id is! String || progress is! num || !progress.isFinite) {
+        throw PlatformException(
+          code: 'invalid_download_progress',
+          message: 'Android yt-dlp sent an invalid progress value.',
+        );
+      }
+      _androidProgressCallbacks[id]?.call(
+        progress.toDouble().clamp(0, 1).toDouble(),
+      );
+    });
   }
 
   Future<void> _downloadStream(
@@ -613,7 +1018,6 @@ class YouTubeDownloadService {
     final total = totalBytes > 0 ? totalBytes : null;
     try {
       final stream = _youtube.videos.streamsClient.get(streamInfo);
-      // Timeout per chunk: abort if stalled for more than 15s instead of hanging indefinitely
       await for (final chunk in stream.timeout(const Duration(seconds: 15))) {
         sink.add(chunk);
         received += chunk.length;
@@ -765,7 +1169,7 @@ class YouTubeDownloadService {
     required String artist,
     String? artwork,
   }) async {
-    final success = await _runFfmpeg(
+    var failure = await _runFfmpeg(
       _transcodeArgs(
         input: input,
         output: output,
@@ -774,7 +1178,7 @@ class YouTubeDownloadService {
         artwork: artwork,
       ),
     );
-    if (success) return;
+    if (failure == null) return;
     if (artwork != null) {
       final retried = await _runFfmpeg(
         _transcodeArgs(
@@ -784,9 +1188,12 @@ class YouTubeDownloadService {
           artist: artist,
         ),
       );
-      if (retried) return;
+      if (retried == null) return;
+      failure = retried;
     }
-    throw const FormatException('MP3 conversion failed. Try again shortly.');
+    throw FormatException(
+      'MP3 conversion failed: ${_compactFfmpegError(failure)}',
+    );
   }
 
   List<String> _transcodeArgs({
@@ -808,8 +1215,8 @@ class YouTubeDownloadService {
     if (artwork != null) ...['-map', '1:v:0'],
     '-c:a',
     'libmp3lame',
-    '-b:a',
-    '192k',
+    '-q:a',
+    '0',
     '-id3v2_version',
     '3',
     '-metadata',
@@ -841,13 +1248,23 @@ class YouTubeDownloadService {
         artist: artist,
       ),
     );
-    if (success) return;
+    if (success == null) return;
     final retried = await _runFfmpeg(
       _muxArgs(videoPath: videoPath, audioPath: audioPath, output: output),
     );
-    if (!retried) {
-      throw const FormatException(
-        'The video could not be combined. Try again.',
+    if (retried == null) return;
+    final audioFallback = await _runFfmpeg(
+      _muxArgs(
+        videoPath: videoPath,
+        audioPath: audioPath,
+        output: output,
+        audioCodec: 'aac',
+      ),
+    );
+    if (audioFallback != null) {
+      throw FormatException(
+        'The video could not be combined. FFmpeg: '
+        '${_compactFfmpegError(audioFallback)}',
       );
     }
   }
@@ -858,6 +1275,7 @@ class YouTubeDownloadService {
     required String output,
     String? title,
     String? artist,
+    String? audioCodec,
   }) => [
     '-y',
     '-hide_banner',
@@ -871,8 +1289,11 @@ class YouTubeDownloadService {
     '0:v:0',
     '-map',
     '1:a:0',
-    '-c',
+    '-c:v',
     'copy',
+    '-c:a',
+    audioCodec ?? 'copy',
+    if (audioCodec == 'aac') ...['-b:a', '192k'],
     '-movflags',
     '+faststart',
     if (title != null) ...['-metadata', 'title=${_escapeMetadata(title)}'],
@@ -880,26 +1301,36 @@ class YouTubeDownloadService {
     output,
   ];
 
-  Future<bool> _runFfmpeg(List<String> args) async {
+  Future<String?> _runFfmpeg(List<String> args) async {
     try {
       final session = await FFmpegKit.executeWithArguments(args);
       final returnCode = await session.getReturnCode();
-      if (ReturnCode.isSuccess(returnCode)) return true;
-      debugPrint('FFmpeg failed: ${await session.getLogsAsString()}');
-      return false;
+      if (ReturnCode.isSuccess(returnCode)) return null;
+      final logs = await session.getLogsAsString();
+      debugPrint('FFmpeg failed: $logs');
+      return logs;
     } on Object catch (error) {
       debugPrint('FFmpeg unavailable: $error');
-      throw const FormatException(
-        'FFmpeg is unavailable on this device, so the media could not be converted.',
-      );
+      throw FormatException('FFmpeg is unavailable on this device: $error');
     }
+  }
+
+  String _compactFfmpegError(String logs) {
+    final lines = logs
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList();
+    final tail = lines.skip(lines.length > 4 ? lines.length - 4 : 0).join(' ');
+    final compact = tail.replaceAll(RegExp(r'\s+'), ' ');
+    return compact.length > 500 ? '${compact.substring(0, 500)}…' : compact;
   }
 
   Future<void> _deleteQuietly(File file) async {
     try {
       if (await file.exists()) await file.delete();
-    } on FileSystemException {
-      // Best effort only.
+    } on FileSystemException catch (error) {
+      debugPrint('A temporary download file could not be deleted: $error');
     }
   }
 
@@ -915,4 +1346,12 @@ class YouTubeDownloadService {
     final match = RegExp(r'^\d+').firstMatch(label.trim());
     return match == null ? 0 : int.parse(match.group(0)!);
   }
+}
+
+double? parseYtDlpProgress(String line) {
+  final match = RegExp(r'\[download\]\s+(\d+(?:\.\d+)?)%').firstMatch(line);
+  if (match == null) return null;
+  final percentage = double.tryParse(match.group(1)!);
+  if (percentage == null || !percentage.isFinite) return null;
+  return (percentage / 100).clamp(0, 1).toDouble();
 }

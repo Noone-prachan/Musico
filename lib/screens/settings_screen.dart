@@ -2,28 +2,183 @@ import 'dart:io';
 
 import 'package:material_ui/material_ui.dart';
 
-import '../models/media_download.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
-import '../widgets/configured_downloads_dialog.dart';
 import '../widgets/musico_widgets.dart';
 
 class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({required this.appState, super.key});
+  const SettingsScreen({
+    required this.appState,
+    this.showBackButton = false,
+    super.key,
+  });
 
   final AppState appState;
+  final bool showBackButton;
 
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width > 1050;
-    return ListView(
-      padding: EdgeInsets.fromLTRB(wide ? 52 : 26, 33, wide ? 52 : 26, 38),
+    final playback = _SettingsGroup(
+      title: 'Playback and library',
       children: [
-        Text(
-          'Settings',
-          style: Theme.of(context).textTheme.displayLarge?.copyWith(
-            fontSize: MediaQuery.sizeOf(context).width > 600 ? 43 : 36,
+        _SettingsSwitch(
+          icon: Icons.sort_by_alpha_outlined,
+          title: 'Sort music alphabetically',
+          detail: 'Keep your saved tracks in title order.',
+          value: appState.sortAlphabetically,
+          onChanged: appState.setSortAlphabetically,
+        ),
+        const Divider(height: 1),
+        _SettingsSwitch(
+          icon: Icons.shuffle_outlined,
+          title: 'Shuffle',
+          detail: 'Choose a random next track when playback advances.',
+          value: appState.shuffle,
+          onChanged: (_) => appState.toggleShuffle(),
+        ),
+        const Divider(height: 1),
+        _SettingsSwitch(
+          icon: Icons.repeat_one_outlined,
+          title: 'Repeat current track',
+          detail: 'Play the current song again when it ends.',
+          value: appState.repeatOne,
+          onChanged: (_) => appState.toggleRepeatOne(),
+        ),
+        const Divider(height: 1),
+        _SettingsSwitch(
+          icon: Icons.playlist_play_outlined,
+          title: 'Autoplay next track',
+          detail: 'Continue to the next song when the current one ends.',
+          value: appState.autoplay,
+          onChanged: appState.setAutoplay,
+        ),
+        const Divider(height: 1),
+        _SettingsVolume(appState: appState),
+      ],
+    );
+    final reminders = _SettingsGroup(
+      title: 'Release reminders',
+      children: [
+        _SettingsSwitch(
+          icon: Icons.notifications_active_outlined,
+          title: 'Anime episode and premiere alerts',
+          detail: appState.notificationsAvailable
+              ? Platform.isAndroid
+                    ? 'Android asks for notification access when you turn this on.'
+                    : 'Notify about upcoming titles saved to your watchlist.'
+              : 'Native notifications are not currently available.',
+          value: appState.notificationsEnabled,
+          onChanged: appState.notificationsAvailable
+              ? (enabled) => _setNotifications(context, enabled)
+              : null,
+        ),
+        if (appState.supportsDesktopBackgroundRefresh) ...[
+          const Divider(height: 1),
+          _SettingsSwitch(
+            icon: Icons.sync_outlined,
+            title: 'Refresh schedule while Musico is open',
+            detail: 'Check AniList every ten minutes; refresh stops when the app closes.',
+            value: appState.backgroundAutoRefresh,
+            onChanged: appState.setBackgroundAutoRefresh,
           ),
+        ],
+        if (appState.errorMessage != null) ...[
+          const Divider(height: 1),
+          _InlineMessage(
+            message: appState.errorMessage!,
+            isError: true,
+            actionLabel: 'Dismiss',
+            onPressed: appState.dismissError,
+          ),
+        ],
+      ],
+    );
+    final privacy = _SettingsGroup(
+      title: 'Privacy',
+      children: [
+        const _SettingsInfo(
+          icon: Icons.language_outlined,
+          title: 'Lyrics use your internet connection',
+          detail: 'Musico sends a track title and artist to LRCLIB. Audio files stay on this device.',
+        ),
+        const Divider(height: 1),
+        _SettingsInfo(
+          icon: Icons.folder_open_outlined,
+          title: 'Imports use the system file picker',
+          detail: Platform.isAndroid
+              ? 'Musico can open only the files you select; broad storage access is not needed.'
+              : 'Musico reads only the media files you select.',
+        ),
+        const Divider(height: 1),
+        const _SettingsInfo(
+          icon: Icons.verified_outlined,
+          title: 'Downloads keep their license details',
+          detail: 'Commons downloads are license-checked and retain their attribution.',
+        ),
+      ],
+    );
+    final backup = _BackupSettings(appState: appState);
+    final settingsContent = wide
+        ? Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  children: [playback, const SizedBox(height: 28), privacy],
+                ),
+              ),
+              const SizedBox(width: 32),
+              Expanded(
+                child: Column(
+                  children: [reminders, const SizedBox(height: 28), backup],
+                ),
+              ),
+            ],
+          )
+        : Column(
+            children: [
+              playback,
+              const SizedBox(height: 25),
+              reminders,
+              const SizedBox(height: 25),
+              privacy,
+              const SizedBox(height: 25),
+              backup,
+            ],
+          );
+
+    return ListView(
+      padding: EdgeInsets.fromLTRB(
+        wide
+            ? 52
+            : showBackButton
+            ? 12
+            : 26,
+        showBackButton ? 12 : 33,
+        wide ? 52 : 26,
+        38,
+      ),
+      children: [
+        Row(
+          children: [
+            if (showBackButton) ...[
+              IconButton(
+                tooltip: 'Back',
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.arrow_back_rounded),
+              ),
+              const SizedBox(width: 8),
+            ],
+            Expanded(
+              child: Text(
+                'Settings',
+                style: Theme.of(context).textTheme.displayLarge?.copyWith(
+                  fontSize: MediaQuery.sizeOf(context).width > 600 ? 43 : 36,
+                ),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 8),
         Text(
@@ -32,111 +187,7 @@ class SettingsScreen extends StatelessWidget {
               ?.copyWith(color: MusicoPalette.muted),
         ),
         const SizedBox(height: 25),
-        _SettingsGroup(
-          title: 'Playback and library',
-          children: [
-            _SettingsSwitch(
-              icon: Icons.sort_by_alpha_rounded,
-              title: 'Sort music alphabetically',
-              detail: 'Keep your saved tracks in title order.',
-              value: appState.sortAlphabetically,
-              onChanged: appState.setSortAlphabetically,
-            ),
-            const Divider(height: 1),
-            _SettingsSwitch(
-              icon: Icons.shuffle_rounded,
-              title: 'Shuffle',
-              detail: 'Choose a random next track when playback advances.',
-              value: appState.shuffle,
-              onChanged: (_) => appState.toggleShuffle(),
-            ),
-            const Divider(height: 1),
-            _SettingsSwitch(
-              icon: Icons.repeat_one_rounded,
-              title: 'Repeat current track',
-              detail: 'Play the current song again when it ends.',
-              value: appState.repeatOne,
-              onChanged: (_) => appState.toggleRepeatOne(),
-            ),
-            const Divider(height: 1),
-            _SettingsSwitch(
-              icon: Icons.playlist_play_rounded,
-              title: 'Autoplay next track',
-              detail: 'Continue to the next song when the current one ends.',
-              value: appState.autoplay,
-              onChanged: appState.setAutoplay,
-            ),
-            const Divider(height: 1),
-            _SettingsVolume(appState: appState),
-          ],
-        ),
-        const SizedBox(height: 20),
-        _SettingsGroup(
-          title: 'Release reminders',
-          children: [
-            _SettingsSwitch(
-              icon: Icons.notifications_active_outlined,
-              title: 'Anime episode and premiere alerts',
-              detail: appState.notificationsAvailable
-                  ? Platform.isAndroid
-                        ? 'Android asks for notification access when you turn this on.'
-                        : 'Notify about upcoming titles saved to your watchlist.'
-                  : 'Native notifications are not currently available.',
-              value: appState.notificationsEnabled,
-              onChanged: appState.notificationsAvailable
-                  ? (enabled) => _setNotifications(context, enabled)
-                  : null,
-            ),
-            if (appState.supportsDesktopBackgroundRefresh) ...[
-              const Divider(height: 1),
-              _SettingsSwitch(
-                icon: Icons.sync_rounded,
-                title: 'Refresh schedule while Musico is open',
-                detail: 'Check AniList every ten minutes; refresh stops when the app closes.',
-                value: appState.backgroundAutoRefresh,
-                onChanged: appState.setBackgroundAutoRefresh,
-              ),
-            ],
-            if (appState.errorMessage != null) ...[
-              const Divider(height: 1),
-              _InlineMessage(
-                message: appState.errorMessage!,
-                isError: true,
-                actionLabel: 'Dismiss',
-                onPressed: appState.dismissError,
-              ),
-            ],
-          ],
-        ),
-        const SizedBox(height: 20),
-        _SettingsGroup(
-          title: 'Privacy',
-          children: [
-            const _SettingsInfo(
-              icon: Icons.language_rounded,
-              title: 'Lyrics use your internet connection',
-              detail: 'Musico sends a track title and artist to LRCLIB. Audio files stay on this device.',
-            ),
-            const Divider(height: 1),
-            _SettingsInfo(
-              icon: Icons.folder_open_outlined,
-              title: 'Imports use the system file picker',
-              detail: Platform.isAndroid
-                  ? 'Musico can open only the files you select; broad storage access is not needed.'
-                  : 'Musico reads only the media files you select.',
-            ),
-            const Divider(height: 1),
-            const _SettingsInfo(
-              icon: Icons.verified_outlined,
-              title: 'Downloads keep their license details',
-              detail: 'Commons downloads are license-checked. Configured direct links keep their declared rights and attribution.',
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-        _DownloadSettings(appState: appState),
-        const SizedBox(height: 20),
-        _BackupSettings(appState: appState),
+        settingsContent,
         if (appState.settingsErrorMessage != null) ...[
           const SizedBox(height: 12),
           _InlineMessage(
@@ -182,15 +233,8 @@ class _SettingsGroup extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(title, style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 10),
-        Container(
-          decoration: BoxDecoration(
-            color: MusicoPalette.paper,
-            border: Border.all(color: MusicoPalette.line),
-            borderRadius: BorderRadius.circular(15),
-          ),
-          child: Column(children: children),
-        ),
+        const SizedBox(height: 8),
+        Column(children: children),
       ],
     );
   }
@@ -294,7 +338,7 @@ class _SettingsIcon extends StatelessWidget {
         color: MusicoPalette.sky,
         borderRadius: BorderRadius.circular(11),
       ),
-      child: Icon(icon, size: 17, color: MusicoPalette.forest),
+      child: Icon(icon, size: 17, color: MusicoPalette.forestLight),
     );
   }
 }
@@ -336,119 +380,6 @@ class _SettingsVolume extends StatelessWidget {
       ),
     );
   }
-}
-
-class _DownloadSettings extends StatelessWidget {
-  const _DownloadSettings({required this.appState});
-
-  final AppState appState;
-
-  @override
-  Widget build(BuildContext context) {
-    final config = appState.mediaDownloadConfig;
-    return _SettingsGroup(
-      title: 'Direct download links',
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(15, 15, 15, 13),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Add direct HTTPS audio or video file URLs to media_downloads.json. Musico checks the file address and response type, but cannot verify that you have permission to download it.',
-                style: Theme.of(context).textTheme.bodySmall
-                    ?.copyWith(height: 1.5),
-              ),
-              if (appState.mediaDownloadConfigPath case final path?) ...[
-                const SizedBox(height: 8),
-                SelectableText(
-                  path,
-                  style: Theme.of(context).textTheme.bodySmall
-                      ?.copyWith(fontFamily: 'IBM Plex Mono', fontSize: 10),
-                ),
-              ],
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  if (Platform.isWindows)
-                    OutlinedButton.icon(
-                      onPressed: appState.openMediaDownloadConfig,
-                      icon: const Icon(Icons.edit_outlined, size: 16),
-                      label: const Text('Edit download links'),
-                    ),
-                  OutlinedButton.icon(
-                    onPressed: appState.importMediaDownloadConfig,
-                    icon: const Icon(Icons.file_open_outlined, size: 16),
-                    label: const Text('Import links'),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: appState.exportMediaDownloadConfig,
-                    icon: const Icon(Icons.ios_share_rounded, size: 16),
-                    label: const Text('Export links'),
-                  ),
-                  IconButton(
-                    tooltip: 'Reload and validate the download links file',
-                    onPressed: appState.reloadMediaDownloadConfig,
-                    icon: const Icon(Icons.refresh_rounded),
-                  ),
-                ],
-              ),
-              if (appState.mediaDownloadErrorMessage case final error?) ...[
-                const SizedBox(height: 8),
-                Text(
-                  error,
-                  style: Theme.of(context).textTheme.bodySmall
-                      ?.copyWith(color: MusicoPalette.error),
-                ),
-              ],
-            ],
-          ),
-        ),
-        if (config != null)
-          for (final category in MediaDownloadCategory.values) ...[
-            const Divider(height: 1),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(15, 11, 15, 11),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _categoryName(category),
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                  ),
-                  Text(
-                    '${config.forCategory(category).length} configured',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    tooltip:
-                        'Browse ${_categoryName(category).toLowerCase()} downloads',
-                    onPressed: config.forCategory(category).isEmpty
-                        ? null
-                        : () => showConfiguredDownloadsDialog(
-                            context,
-                            appState: appState,
-                            category: category,
-                          ),
-                    icon: const Icon(Icons.download_rounded, size: 17),
-                  ),
-                ],
-              ),
-            ),
-          ],
-      ],
-    );
-  }
-
-  String _categoryName(MediaDownloadCategory category) => switch (category) {
-    MediaDownloadCategory.anime => 'Anime episode',
-    MediaDownloadCategory.music => 'Music',
-    MediaDownloadCategory.video => 'Video',
-  };
 }
 
 class _BackupSettings extends StatelessWidget {
@@ -506,7 +437,7 @@ class _BackupSettings extends StatelessWidget {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(
-                            Icons.settings_backup_restore_rounded,
+                            Icons.settings_backup_restore_outlined,
                             size: 17,
                           ),
                     label: Text(

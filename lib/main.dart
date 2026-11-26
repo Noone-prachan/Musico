@@ -11,11 +11,12 @@ import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 
-import 'screens/anime_screen.dart';
-import 'screens/music_catalog_sheet.dart';
+import 'screens/local_video_screen.dart';
 import 'screens/music_screen.dart';
 import 'screens/settings_screen.dart';
+import 'screens/streaming_screen.dart';
 import 'screens/watchlist_screen.dart';
+import 'models/video_track.dart';
 import 'models/music_track.dart';
 import 'state/app_state.dart';
 import 'theme/app_theme.dart';
@@ -27,14 +28,9 @@ Future<void> main() async {
   try {
     MediaKit.ensureInitialized();
   } on Object catch (error, stackTrace) {
-    // Video playback is optional; the music library must still start.
     debugPrint('Media playback could not be initialized: $error\n$stackTrace');
   }
   if (Platform.isAndroid) {
-    // androidNotificationOngoing and androidStopForegroundOnPause must not
-    // both conflict: ongoing=true requires stopForegroundOnPause=false,
-    // but audio_service asserts they are consistent — keep ongoing=false so
-    // the notification is dismissible and the assertion is satisfied.
     await JustAudioBackground.init(
       androidNotificationChannelId: 'app.sideb.side_b.audio',
       androidNotificationChannelName: 'Musico playback',
@@ -78,7 +74,6 @@ Future<void> main() async {
         runApp(const _WindowsSetupApp());
       }
     } on Object catch (error, stackTrace) {
-      // Saved preferences must never keep the window from opening.
       debugPrint(
         'Musico could not read saved preferences: $error\n$stackTrace',
       );
@@ -144,7 +139,7 @@ class _AndroidSetupAppState extends State<_AndroidSetupApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: MusicoTheme.dark,
+      theme: MusicoTheme.light,
       home: Scaffold(
         body: SafeArea(
           child: Center(
@@ -165,7 +160,6 @@ class _AndroidSetupAppState extends State<_AndroidSetupApp> {
                           'Enable notifications',
                           style: TextStyle(
                             color: MusicoPalette.ink,
-                            fontFamily: 'Space Grotesk',
                             fontSize: 26,
                             fontWeight: FontWeight.w700,
                             height: 1.15,
@@ -387,7 +381,7 @@ class _WindowsSetupAppState extends State<_WindowsSetupApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: MusicoTheme.dark,
+      theme: MusicoTheme.light,
       home: Scaffold(
         body: Center(
           child: ConstrainedBox(
@@ -407,7 +401,6 @@ class _WindowsSetupAppState extends State<_WindowsSetupApp> {
                         'Where should Musico store your files?',
                         style: const TextStyle(
                           color: MusicoPalette.ink,
-                          fontFamily: 'Space Grotesk',
                           fontSize: 26,
                           fontWeight: FontWeight.w700,
                           height: 1.15,
@@ -498,7 +491,7 @@ class MusicoApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
     title: 'Musico',
     debugShowCheckedModeBanner: false,
-    theme: MusicoTheme.dark,
+    theme: MusicoTheme.light,
     home: const AuroraBackground(child: _MusicoHome()),
   );
 }
@@ -511,22 +504,42 @@ class _MusicoHome extends StatefulWidget {
 }
 
 class _MusicoHomeState extends State<_MusicoHome> {
+  static const _pageCount = 9;
+
   late final AppState _appState;
   int _selectedPage = 0;
   String? _startupError;
 
-  static const _pageTitles = [
-    'Music',
-    'Anime calendar',
-    'Watchlist',
-    'Settings',
-  ];
+  String? _watchSeed;
+  int _watchSeedTick = 0;
+
+  void _openTvWithQuery(String query) {
+    setState(() {
+      _watchSeed = query;
+      _watchSeedTick++;
+      _selectedPage = 2;
+    });
+  }
 
   @override
   void initState() {
     super.initState();
     _appState = AppState();
+    final startPage = int.tryParse(
+      Platform.environment['MUSICO_START_PAGE'] ?? '',
+    );
+    if (startPage != null && startPage >= 0 && startPage < _pageCount) {
+      _selectedPage = startPage;
+    }
     unawaited(_initialize());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.sizeOf(context).width < 680 && _selectedPage >= 8) {
+      _selectedPage = 0;
+    }
   }
 
   Future<void> _initialize() async {
@@ -534,11 +547,7 @@ class _MusicoHomeState extends State<_MusicoHome> {
       await _appState.initialize();
     } on Object catch (error, stackTrace) {
       debugPrint('Musico could not finish starting: $error\n$stackTrace');
-      // Only surface a banner for truly unrecoverable errors, not network/
-      // playlist-fetch failures that _appState already handles internally.
       if (mounted && !_appState.setupCompleted) {
-        // Setup is blocked — show a helpful message instead of a generic one.
-        // The setup dialog below will still appear; don't double-banner.
       } else if (mounted) {
         setState(() {
           _startupError =
@@ -547,7 +556,6 @@ class _MusicoHomeState extends State<_MusicoHome> {
       }
     }
     if (!mounted) return;
-    // Always clear the startup-error banner once setup is confirmed complete.
     if (_appState.setupCompleted && _startupError != null) {
       setState(() => _startupError = null);
     }
@@ -653,7 +661,6 @@ class _MusicoHomeState extends State<_MusicoHome> {
                             dialogError = null;
                           });
 
-                          // Determine the best writable candidate.
                           final userProfile =
                               Platform.environment['USERPROFILE'];
                           final candidates = <String>[
@@ -687,12 +694,9 @@ class _MusicoHomeState extends State<_MusicoHome> {
                             }
                           }
 
-                          // Update in-memory state immediately so the app
-                          // works even if the prefs write is slow/fails.
                           _appState.mediaStorageRoot = chosenRoot;
                           _appState.setupCompleted = true;
 
-                          // Fire-and-forget the prefs write; never block UI on it.
                           unawaited(
                             SharedPreferences.getInstance()
                                 .then((prefs) async {
@@ -767,8 +771,28 @@ class _MusicoHomeState extends State<_MusicoHome> {
   }
 
   void _selectPage(int index) {
-    if (index < 0 || index >= _pageTitles.length) return;
-    setState(() => _selectedPage = index);
+    if (index < 0 || index >= _pageCount) return;
+    setState(() {
+      _selectedPage = index;
+      _watchSeed = null;
+    });
+  }
+
+  void _openCompactSettings() {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          backgroundColor: MusicoPalette.canvas,
+          body: SafeArea(
+            child: AnimatedBuilder(
+              animation: _appState,
+              builder: (context, _) =>
+                  SettingsScreen(appState: _appState, showBackButton: true),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -800,7 +824,6 @@ class _MusicoHomeState extends State<_MusicoHome> {
                         child: Column(
                           children: [
                             _TopBar(
-                              title: _pageTitles[_selectedPage],
                               isWifiConnected: _appState.isWifiConnected,
                               hasNetworkConnection:
                                   _appState.hasNetworkConnection,
@@ -818,9 +841,9 @@ class _MusicoHomeState extends State<_MusicoHome> {
                 : Column(
                     children: [
                       _TopBar(
-                        title: _pageTitles[_selectedPage],
                         isWifiConnected: _appState.isWifiConnected,
                         hasNetworkConnection: _appState.hasNetworkConnection,
+                        onSettingsPressed: rail ? null : _openCompactSettings,
                       ),
                       if (_startupError != null)
                         _StartupError(message: _startupError!),
@@ -851,34 +874,74 @@ class _MusicoHomeState extends State<_MusicoHome> {
                       if (showAudioDock)
                         PlayerDock(appState: _appState, compact: true),
                       if (!rail)
-                        NavigationBar(
-                          selectedIndex: _selectedPage,
-                          onDestinationSelected: _selectPage,
-                          height: 62,
-                          labelBehavior:
-                              NavigationDestinationLabelBehavior.alwaysShow,
-                          destinations: const [
-                            NavigationDestination(
-                              icon: Icon(Icons.library_music_outlined),
-                              selectedIcon: Icon(Icons.library_music_rounded),
-                              label: 'Music',
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 5, 12, 8),
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: MusicoPalette.canvasAlt,
+                              borderRadius: BorderRadius.circular(22),
+                              border: Border.all(color: MusicoPalette.line),
                             ),
-                            NavigationDestination(
-                              icon: Icon(Icons.calendar_month_outlined),
-                              selectedIcon: Icon(Icons.calendar_month_rounded),
-                              label: 'Anime',
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(22),
+                              child: NavigationBar(
+                                selectedIndex: switch (_selectedPage) {
+                                  0 => 0,
+                                  1 => 1,
+                                  2 => 2,
+                                  3 => 3,
+                                  _ => 4,
+                                },
+                                onDestinationSelected: (index) =>
+                                    _selectPage(switch (index) {
+                                      0 => 0,
+                                      1 => 1,
+                                      2 => 2,
+                                      3 => 3,
+                                      _ => 7,
+                                    }),
+                                height: 62,
+                                backgroundColor: Colors.transparent,
+                                indicatorColor: MusicoPalette.clayLight,
+                                labelBehavior:
+                                    NavigationDestinationLabelBehavior
+                                        .onlyShowSelected,
+                                destinations: const [
+                                  NavigationDestination(
+                                    icon: Icon(Icons.library_music_outlined),
+                                    selectedIcon: Icon(
+                                      Icons.library_music_outlined,
+                                    ),
+                                    label: 'Songs',
+                                  ),
+                                  NavigationDestination(
+                                    icon: Icon(Icons.ondemand_video_outlined),
+                                    selectedIcon: Icon(
+                                      Icons.ondemand_video_outlined,
+                                    ),
+                                    label: 'Anime',
+                                  ),
+                                  NavigationDestination(
+                                    icon: Icon(Icons.live_tv_outlined),
+                                    selectedIcon: Icon(Icons.live_tv_outlined),
+                                    label: 'TV',
+                                  ),
+                                  NavigationDestination(
+                                    icon: Icon(Icons.movie_outlined),
+                                    selectedIcon: Icon(Icons.movie_outlined),
+                                    label: 'Movies',
+                                  ),
+                                  NavigationDestination(
+                                    icon: Icon(Icons.more_horiz_outlined),
+                                    selectedIcon: Icon(
+                                      Icons.more_horiz_outlined,
+                                    ),
+                                    label: 'More',
+                                  ),
+                                ],
+                              ),
                             ),
-                            NavigationDestination(
-                              icon: Icon(Icons.bookmarks_outlined),
-                              selectedIcon: Icon(Icons.bookmarks_rounded),
-                              label: 'Saved',
-                            ),
-                            NavigationDestination(
-                              icon: Icon(Icons.settings_outlined),
-                              selectedIcon: Icon(Icons.settings_rounded),
-                              label: 'Settings',
-                            ),
-                          ],
+                          ),
                         ),
                     ],
                   ),
@@ -890,12 +953,32 @@ class _MusicoHomeState extends State<_MusicoHome> {
 
   Widget _currentScreen() {
     final screen = switch (_selectedPage) {
-      0 => MusicScreen(
+      0 => MusicScreen(appState: _appState),
+      1 => StreamingScreen(
         appState: _appState,
-        onOpenCatalog: () => showMusicCatalog(context, _appState),
+        initialTab: 0,
+        onOpenTvShows: _openTvWithQuery,
       ),
-      1 => AnimeScreen(appState: _appState),
-      2 => WatchlistScreen(appState: _appState),
+      2 => StreamingScreen(
+        key: ValueKey<String>('tv-$_watchSeedTick'),
+        appState: _appState,
+        initialTab: 1,
+        seedQuery: _watchSeed,
+        onOpenTvShows: _openTvWithQuery,
+      ),
+      3 => StreamingScreen(
+        key: ValueKey<String>('movies-$_watchSeedTick'),
+        appState: _appState,
+        initialTab: 2,
+        seedQuery: _watchSeed,
+      ),
+      4 => MusicPlaylistsScreen(
+        appState: _appState,
+        onOpenPlaylist: () => _selectPage(0),
+      ),
+      5 => MusicScreen(appState: _appState, favoritesOnly: true),
+      6 => WatchlistScreen(appState: _appState),
+      7 => _MoreScreen(appState: _appState, onSelected: _selectPage),
       _ => SettingsScreen(appState: _appState),
     };
     return AnimatedSwitcher(
@@ -903,6 +986,99 @@ class _MusicoHomeState extends State<_MusicoHome> {
       switchInCurve: Curves.easeOutCubic,
       switchOutCurve: Curves.easeInCubic,
       child: KeyedSubtree(key: ValueKey<int>(_selectedPage), child: screen),
+    );
+  }
+}
+
+class _MoreScreen extends StatelessWidget {
+  const _MoreScreen({required this.appState, required this.onSelected});
+
+  final AppState appState;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final destinations = [
+      (label: 'Playlists', icon: Icons.queue_music_outlined, page: 4),
+      (label: 'Favorites', icon: Icons.favorite_border_rounded, page: 5),
+      (label: 'Watchlist', icon: Icons.bookmarks_outlined, page: 6),
+    ];
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(22, 30, 22, 34),
+      children: [
+        Text('Your library', style: Theme.of(context).textTheme.displayLarge),
+        const SizedBox(height: 5),
+        Text(
+          'Saved music and titles, all in one place.',
+          style: Theme.of(context).textTheme.bodyMedium
+              ?.copyWith(color: MusicoPalette.muted),
+        ),
+        const SizedBox(height: 22),
+        Card(
+          margin: EdgeInsets.zero,
+          child: Column(
+            children: [
+              for (var index = 0; index < destinations.length; index++) ...[
+                ListTile(
+                  leading: Icon(
+                    destinations[index].icon,
+                    color: MusicoPalette.forest,
+                  ),
+                  title: Text(destinations[index].label),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => onSelected(destinations[index].page),
+                ),
+                if (index < destinations.length - 1)
+                  const Divider(height: 1, indent: 56),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 26),
+        Text('On this device', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 10),
+        Card(
+          margin: EdgeInsets.zero,
+          child: Column(
+            children: [
+              ListTile(
+                leading: Icon(
+                  Icons.live_tv_outlined,
+                  color: MusicoPalette.forest,
+                ),
+                title: const Text('Saved TV episodes'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _openLocal(context, VideoCategory.tvShow),
+              ),
+              const Divider(height: 1, indent: 56),
+              ListTile(
+                leading: Icon(
+                  Icons.movie_outlined,
+                  color: MusicoPalette.forest,
+                ),
+                title: const Text('Saved movies'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => _openLocal(context, VideoCategory.movie),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _openLocal(BuildContext context, VideoCategory category) {
+    final label = category == VideoCategory.tvShow
+        ? 'Saved TV episodes'
+        : 'Saved movies';
+    Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: Text(label)),
+          body: LocalVideoScreen(appState: appState, category: category),
+        ),
+      ),
     );
   }
 }
@@ -924,30 +1100,50 @@ class _SideNavigation extends StatelessWidget {
   Widget build(BuildContext context) {
     if (!desktop) {
       return NavigationRail(
-        selectedIndex: selectedIndex,
-        onDestinationSelected: onSelected,
+        selectedIndex: selectedIndex == 8 ? 7 : selectedIndex,
+        onDestinationSelected: (index) => onSelected(index == 7 ? 8 : index),
         labelType: NavigationRailLabelType.all,
         groupAlignment: -.75,
         backgroundColor: MusicoPalette.paper,
         destinations: const [
           NavigationRailDestination(
             icon: Icon(Icons.library_music_outlined),
-            selectedIcon: Icon(Icons.library_music_rounded),
-            label: Text('Music'),
+            selectedIcon: Icon(Icons.library_music_outlined),
+            label: Text('Songs'),
           ),
           NavigationRailDestination(
-            icon: Icon(Icons.calendar_month_outlined),
-            selectedIcon: Icon(Icons.calendar_month_rounded),
+            icon: Icon(Icons.ondemand_video_outlined),
+            selectedIcon: Icon(Icons.ondemand_video_outlined),
             label: Text('Anime'),
           ),
           NavigationRailDestination(
+            icon: Icon(Icons.live_tv_outlined),
+            selectedIcon: Icon(Icons.live_tv_outlined),
+            label: Text('TV shows'),
+          ),
+          NavigationRailDestination(
+            icon: Icon(Icons.movie_outlined),
+            selectedIcon: Icon(Icons.movie_outlined),
+            label: Text('Movies'),
+          ),
+          NavigationRailDestination(
+            icon: Icon(Icons.queue_music_outlined),
+            selectedIcon: Icon(Icons.queue_music_outlined),
+            label: Text('Playlists'),
+          ),
+          NavigationRailDestination(
+            icon: Icon(Icons.favorite_border_rounded),
+            selectedIcon: Icon(Icons.favorite_border_rounded),
+            label: Text('Favorites'),
+          ),
+          NavigationRailDestination(
             icon: Icon(Icons.bookmarks_outlined),
-            selectedIcon: Icon(Icons.bookmarks_rounded),
-            label: Text('Saved'),
+            selectedIcon: Icon(Icons.bookmarks_outlined),
+            label: Text('Watchlist'),
           ),
           NavigationRailDestination(
             icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings_rounded),
+            selectedIcon: Icon(Icons.settings_outlined),
             label: Text('Settings'),
           ),
         ],
@@ -976,8 +1172,7 @@ class _SideNavigation extends StatelessWidget {
                       Text(
                         'Musico',
                         style: TextStyle(
-                          color: MusicoPalette.white,
-                          fontFamily: 'Space Grotesk',
+                          color: MusicoPalette.ink,
                           fontSize: 21,
                           fontWeight: FontWeight.w700,
                           letterSpacing: -.7,
@@ -992,24 +1187,52 @@ class _SideNavigation extends StatelessWidget {
           ),
           _NavigationItem(
             icon: Icons.library_music_outlined,
-            selectedIcon: Icons.library_music_rounded,
-            label: 'Music',
+            selectedIcon: Icons.library_music_outlined,
+            label: 'Songs',
             selected: selectedIndex == 0,
             onTap: () => onSelected(0),
           ),
           _NavigationItem(
-            icon: Icons.calendar_month_outlined,
-            selectedIcon: Icons.calendar_month_rounded,
-            label: 'Anime calendar',
+            icon: Icons.ondemand_video_outlined,
+            selectedIcon: Icons.ondemand_video_outlined,
+            label: 'Anime',
             selected: selectedIndex == 1,
             onTap: () => onSelected(1),
           ),
           _NavigationItem(
-            icon: Icons.bookmarks_outlined,
-            selectedIcon: Icons.bookmarks_rounded,
-            label: 'Watchlist',
+            icon: Icons.live_tv_outlined,
+            selectedIcon: Icons.live_tv_outlined,
+            label: 'TV Shows',
             selected: selectedIndex == 2,
             onTap: () => onSelected(2),
+          ),
+          _NavigationItem(
+            icon: Icons.movie_outlined,
+            selectedIcon: Icons.movie_outlined,
+            label: 'Movies',
+            selected: selectedIndex == 3,
+            onTap: () => onSelected(3),
+          ),
+          _NavigationItem(
+            icon: Icons.queue_music_outlined,
+            selectedIcon: Icons.queue_music_outlined,
+            label: 'Playlists',
+            selected: selectedIndex == 4,
+            onTap: () => onSelected(4),
+          ),
+          _NavigationItem(
+            icon: Icons.favorite_border_rounded,
+            selectedIcon: Icons.favorite_border_rounded,
+            label: 'Favorites',
+            selected: selectedIndex == 5,
+            onTap: () => onSelected(5),
+          ),
+          _NavigationItem(
+            icon: Icons.bookmarks_outlined,
+            selectedIcon: Icons.bookmarks_outlined,
+            label: 'Watchlist',
+            selected: selectedIndex == 6,
+            onTap: () => onSelected(6),
           ),
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
@@ -1017,10 +1240,10 @@ class _SideNavigation extends StatelessWidget {
           ),
           _NavigationItem(
             icon: Icons.settings_outlined,
-            selectedIcon: Icons.settings_rounded,
+            selectedIcon: Icons.settings_outlined,
             label: 'Settings',
-            selected: selectedIndex == 3,
-            onTap: () => onSelected(3),
+            selected: selectedIndex == 8,
+            onTap: () => onSelected(8),
           ),
           const Spacer(),
           if (appState.currentTrack case final track?) ...[
@@ -1055,8 +1278,11 @@ class _SidebarNowPlaying extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 0, 14, 3),
       child: Material(
-        color: MusicoPalette.white.withValues(alpha: .09),
-        borderRadius: BorderRadius.circular(13),
+        color: MusicoPalette.paper,
+        shape: RoundedRectangleBorder(
+          side: const BorderSide(color: MusicoPalette.line),
+          borderRadius: BorderRadius.circular(13),
+        ),
         child: InkWell(
           onTap: onTap,
           mouseCursor: SystemMouseCursors.click,
@@ -1087,10 +1313,9 @@ class _SidebarNowPlaying extends StatelessWidget {
                         playing ? 'NOW PLAYING' : 'PAUSED',
                         style: const TextStyle(
                           color: MusicoPalette.olive,
-                          fontFamily: 'IBM Plex Mono',
-                          fontSize: 8,
+                          fontSize: 9,
                           fontWeight: FontWeight.w600,
-                          letterSpacing: .6,
+                          letterSpacing: .2,
                         ),
                       ),
                       const SizedBox(height: 3),
@@ -1099,7 +1324,7 @@ class _SidebarNowPlaying extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          color: MusicoPalette.white,
+                          color: MusicoPalette.ink,
                           fontSize: 11,
                           fontWeight: FontWeight.w600,
                         ),
@@ -1109,7 +1334,7 @@ class _SidebarNowPlaying extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          color: MusicoPalette.softInk,
+                          color: MusicoPalette.muted,
                           fontSize: 10,
                         ),
                       ),
@@ -1132,10 +1357,10 @@ class _SidebarArtworkIcon extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     width: 36,
     height: 36,
-    color: MusicoPalette.white.withValues(alpha: .16),
+    color: MusicoPalette.canvasAlt,
     child: const Icon(
-      Icons.graphic_eq_rounded,
-      color: MusicoPalette.olive,
+      Icons.graphic_eq_outlined,
+      color: MusicoPalette.forestLight,
       size: 18,
     ),
   );
@@ -1188,7 +1413,7 @@ class _NavigationItem extends StatelessWidget {
                     Icon(
                       selected ? selectedIcon : icon,
                       color: selected
-                          ? MusicoPalette.forest
+                          ? MusicoPalette.terracotta
                           : MusicoPalette.muted,
                       size: 20,
                     ),
@@ -1219,21 +1444,21 @@ class _NavigationItem extends StatelessWidget {
 
 class _TopBar extends StatelessWidget {
   const _TopBar({
-    required this.title,
     required this.isWifiConnected,
     required this.hasNetworkConnection,
     this.desktop = false,
+    this.onSettingsPressed,
   });
 
-  final String title;
   final bool isWifiConnected;
   final bool hasNetworkConnection;
   final bool desktop;
+  final VoidCallback? onSettingsPressed;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 68,
+      height: desktop ? 46 : 54,
       padding: EdgeInsets.symmetric(horizontal: desktop ? 29 : 19),
       decoration: const BoxDecoration(
         color: MusicoPalette.canvas,
@@ -1242,14 +1467,14 @@ class _TopBar extends StatelessWidget {
       child: Row(
         children: [
           if (!desktop) ...[
-            const MusicoLogo(size: 31),
+            const MusicoLogo(size: 30),
             const SizedBox(width: 9),
+            Text(
+              'Musico',
+              style: Theme.of(context).textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w700, letterSpacing: -0.3),
+            ),
           ],
-          Text(
-            title,
-            style: Theme.of(context).textTheme.titleSmall
-                ?.copyWith(fontSize: 15, fontWeight: FontWeight.w600),
-          ),
           const Spacer(),
           Tooltip(
             message: hasNetworkConnection
@@ -1266,7 +1491,7 @@ class _TopBar extends StatelessWidget {
                       : Icons.wifi_off_rounded,
                   size: 15,
                   color: hasNetworkConnection
-                      ? MusicoPalette.forest
+                      ? MusicoPalette.forestLight
                       : MusicoPalette.muted,
                 ),
                 const SizedBox(width: 7),
@@ -1281,6 +1506,14 @@ class _TopBar extends StatelessWidget {
               ],
             ),
           ),
+          if (onSettingsPressed != null) ...[
+            const SizedBox(width: 8),
+            IconButton(
+              tooltip: 'Settings',
+              onPressed: onSettingsPressed,
+              icon: const Icon(Icons.settings_outlined),
+            ),
+          ],
         ],
       ),
     );

@@ -4,6 +4,7 @@ import '../models/youtube_media.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import 'musico_widgets.dart';
+import 'search_autocomplete_field.dart';
 
 Future<void> showYouTubeDownloadDialog(
   BuildContext context, {
@@ -194,18 +195,26 @@ class _YouTubeDownloadDialogState extends State<YouTubeDownloadDialog> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        TextField(
+        SearchAutocompleteField(
           controller: _queryController,
+          suggestions: [
+            ...AppState.musicSuggestions,
+            for (final track in _appState.tracks) ...[
+              track.displayMetadata.title,
+              track.displayMetadata.artist,
+            ],
+            ..._appState.youtubeSearchResults.map((result) => result.title),
+          ],
           autofocus: true,
-          textInputAction: TextInputAction.search,
           onSubmitted: _search,
+          onSelected: _search,
           decoration: InputDecoration(
             labelText: 'Search YouTube',
             hintText: 'Song, artist, or video name…',
             prefixIcon: const Icon(Icons.search_rounded),
             suffixIcon: IconButton(
               tooltip: 'Search',
-              onPressed: _appState.isSearchingYouTube ? null : _search,
+              onPressed: _appState.isSearchingYouTube ? null : () => _search(),
               icon: _appState.isSearchingYouTube
                   ? const SizedBox(
                       width: 18,
@@ -258,6 +267,7 @@ class _YouTubeDownloadDialogState extends State<YouTubeDownloadDialog> {
     final key = _progressKey();
     final downloading = _appState.downloadingYouTubeIds.contains(key);
     final progress = _appState.youtubeDownloadProgress[key];
+    final stage = _appState.youtubeDownloadStages[key];
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -370,6 +380,12 @@ class _YouTubeDownloadDialogState extends State<YouTubeDownloadDialog> {
         ),
         if (downloading) ...[
           const SizedBox(height: 10),
+          Text(
+            '${stage ?? 'Preparing download…'}'
+            '${progress == null ? '' : ' · ${(progress * 100).round()}%'}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 6),
           LinearProgressIndicator(value: progress),
         ],
       ],
@@ -378,49 +394,293 @@ class _YouTubeDownloadDialogState extends State<YouTubeDownloadDialog> {
 
   Widget _buildQualityPicker() {
     if (_loadingQualities) {
-      return const Row(
-        children: [
-          SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-          SizedBox(width: 10),
-          Text('Loading qualities…'),
-        ],
+      return _QualityPickerNotice(
+        icon: Icons.hourglass_top_rounded,
+        message: 'Loading available qualities…',
+        trailing: const SizedBox(
+          width: 17,
+          height: 17,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
       );
     }
     if (_qualitiesError != null) {
-      return Text(
-        _qualitiesError!,
-        style: Theme.of(context).textTheme.bodySmall
-            ?.copyWith(color: MusicoPalette.error),
+      return _QualityPickerNotice(
+        icon: Icons.error_outline_rounded,
+        message: _qualitiesError!,
+        isError: true,
+        trailing: TextButton(
+          onPressed: () {
+            setState(() => _qualitiesError = null);
+            _ensureQualities();
+          },
+          child: const Text('Retry'),
+        ),
       );
     }
     if (_qualities.isEmpty) {
-      return Text(
-        'No MP4 quality is available for this video.',
-        style: Theme.of(context).textTheme.bodySmall,
+      return const _QualityPickerNotice(
+        icon: Icons.video_settings_outlined,
+        message: 'No MP4 quality is available for this video.',
       );
     }
-    return DropdownButtonFormField<String>(
-      initialValue: _qualityLabel,
-      decoration: const InputDecoration(
-        labelText: 'Quality',
-        prefixIcon: Icon(Icons.high_quality_rounded),
-      ),
-      items: [
-        for (final quality in _qualities)
-          DropdownMenuItem(
-            value: quality.label,
-            child: Text(
-              '${quality.label}'
-              '${quality.codec != null && quality.codec!.toLowerCase().contains('avc') ? ' · H.264' : ''}'
-              '${quality.sizeLabel.isNotEmpty ? ' · ${quality.sizeLabel}' : ''}',
+    final selectedQuality =
+        _qualities
+            .where((quality) => quality.label == _qualityLabel)
+            .firstOrNull ??
+        _qualities.first;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final menuItemWidth = (constraints.maxWidth - 72)
+            .clamp(160.0, 255.0)
+            .toDouble();
+        return MenuAnchor(
+          crossAxisUnconstrained: false,
+          style: MenuStyle(
+            backgroundColor: const WidgetStatePropertyAll(
+              MusicoPalette.surface,
+            ),
+            surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+            elevation: const WidgetStatePropertyAll(10),
+            padding: const WidgetStatePropertyAll(
+              EdgeInsets.symmetric(vertical: 8),
+            ),
+            shape: WidgetStatePropertyAll(
+              RoundedRectangleBorder(
+                side: const BorderSide(color: MusicoPalette.line),
+                borderRadius: BorderRadius.circular(14),
+              ),
             ),
           ),
-      ],
-      onChanged: (value) => setState(() => _qualityLabel = value),
+          menuChildren: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
+              child: Text(
+                'VIDEO QUALITY',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  fontFamily: 'IBM Plex Mono',
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: .6,
+                  color: MusicoPalette.muted,
+                ),
+              ),
+            ),
+            for (final quality in _qualities)
+              MenuItemButton(
+                onPressed: () => setState(() => _qualityLabel = quality.label),
+                leadingIcon: Icon(
+                  quality.label == selectedQuality.label
+                      ? Icons.check_circle_rounded
+                      : Icons.video_settings_outlined,
+                  color: quality.label == selectedQuality.label
+                      ? MusicoPalette.olive
+                      : MusicoPalette.muted,
+                  size: 18,
+                ),
+                style: ButtonStyle(
+                  foregroundColor: const WidgetStatePropertyAll(
+                    MusicoPalette.ink,
+                  ),
+                  padding: const WidgetStatePropertyAll(
+                    EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                  ),
+                  shape: WidgetStatePropertyAll(
+                    RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                  ),
+                ),
+                child: SizedBox(
+                  width: menuItemWidth,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              quality.label,
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            if (_codecLabel(quality.codec) case final codec?)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: Text(
+                                  codec,
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      if (quality.sizeLabel.isNotEmpty)
+                        Text(
+                          quality.sizeLabel,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                fontFamily: 'IBM Plex Mono',
+                                color: MusicoPalette.softInk,
+                              ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+          builder: (context, controller, _) {
+            return Semantics(
+              button: true,
+              expanded: controller.isOpen,
+              label: 'Video quality: ${selectedQuality.label}',
+              child: Material(
+                color: Colors.transparent,
+                borderRadius: BorderRadius.circular(13),
+                child: InkWell(
+                  onTap: () => controller.isOpen
+                      ? controller.close()
+                      : controller.open(),
+                  borderRadius: BorderRadius.circular(13),
+                  child: Ink(
+                    padding: const EdgeInsets.fromLTRB(14, 11, 12, 11),
+                    decoration: BoxDecoration(
+                      color: MusicoPalette.glass,
+                      border: Border.all(
+                        color: controller.isOpen
+                            ? MusicoPalette.forestLight
+                            : MusicoPalette.glassStrong,
+                      ),
+                      borderRadius: BorderRadius.circular(13),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.high_quality_rounded,
+                          color: MusicoPalette.muted,
+                          size: 19,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'Quality',
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(fontSize: 11),
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                selectedQuality.label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.titleSmall,
+                              ),
+                              if (_qualityDetails(selectedQuality)
+                                  case final details?)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 2),
+                                  child: Text(
+                                    details,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        AnimatedRotation(
+                          turns: controller.isOpen ? .5 : 0,
+                          duration: MediaQuery.disableAnimationsOf(context)
+                              ? Duration.zero
+                              : const Duration(milliseconds: 150),
+                          child: const Icon(
+                            Icons.keyboard_arrow_down_rounded,
+                            color: MusicoPalette.softInk,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  String? _codecLabel(String? codec) {
+    if (codec == null || codec.trim().isEmpty) return null;
+    final normalized = codec.toLowerCase();
+    if (normalized.contains('avc') || normalized.contains('h264')) {
+      return 'H.264';
+    }
+    if (normalized.contains('vp9')) return 'VP9';
+    if (normalized.contains('av01') || normalized.contains('av1')) {
+      return 'AV1';
+    }
+    if (normalized.contains('hev') || normalized.contains('h265')) {
+      return 'H.265';
+    }
+    return codec;
+  }
+
+  String? _qualityDetails(YouTubeQuality quality) {
+    final codec = _codecLabel(quality.codec);
+    final size = quality.sizeLabel;
+    if (codec == null) return size.isEmpty ? null : size;
+    if (size.isEmpty) return codec;
+    return '$codec · $size';
+  }
+}
+
+class _QualityPickerNotice extends StatelessWidget {
+  const _QualityPickerNotice({
+    required this.icon,
+    required this.message,
+    this.isError = false,
+    this.trailing,
+  });
+
+  final IconData icon;
+  final String message;
+  final bool isError;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isError ? MusicoPalette.error : MusicoPalette.muted;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(13, 11, 9, 11),
+      decoration: BoxDecoration(
+        color: MusicoPalette.glass,
+        border: Border.all(color: MusicoPalette.glassStrong),
+        borderRadius: BorderRadius.circular(13),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: isError ? MusicoPalette.error : MusicoPalette.softInk,
+              ),
+            ),
+          ),
+          if (trailing != null) ...[const SizedBox(width: 6), trailing!],
+        ],
+      ),
     );
   }
 }

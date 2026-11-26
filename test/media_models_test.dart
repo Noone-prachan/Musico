@@ -11,9 +11,76 @@ void main() {
         path: r'C:\Musico\videos\session.mp4',
         addedAtMs: 456,
         byteSize: 789,
+        artist: 'A channel',
+        originalTitle: 'Original upload title',
+        videoId: 'dQw4w9WgXcQ',
+        thumbnailUrl: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+        artworkPath: r'C:\Musico\artwork\dQw4w9WgXcQ.jpg',
+        quality: '1080p',
+        durationMs: 214000,
       );
 
       expect(VideoTrack.fromJson(video.toJson()).toJson(), video.toJson());
+      expect(video.copyWith(positionMs: 12000).videoId, video.videoId);
+      expect(video.copyWith(positionMs: 12000).artworkPath, video.artworkPath);
+    });
+
+    test(
+      'video categories round-trip and legacy videos stay uncategorized',
+      () {
+        const episode = VideoTrack(
+          id: 'episode-123',
+          title: 'Season 1 episode 1',
+          path: r'C:\Musico\videos\episode.mp4',
+          addedAtMs: 456,
+          byteSize: 789,
+          category: VideoCategory.tvShow,
+        );
+        final legacy = VideoTrack.fromJson({
+          'id': 'video-legacy',
+          'title': 'Older video',
+          'path': r'C:\Musico\videos\older.mp4',
+        });
+
+        expect(
+          VideoTrack.fromJson(episode.toJson()).category,
+          VideoCategory.tvShow,
+        );
+        expect(legacy.category, VideoCategory.other);
+        expect(legacy.positionMs, 0);
+        expect(legacy.durationMs, 0);
+        expect(legacy.completed, isFalse);
+      },
+    );
+
+    test('video watch progress round-trips and survives category changes', () {
+      const video = VideoTrack(
+        id: 'resume-123',
+        title: 'Season 1 episode 1',
+        path: r'C:\Musico\videos\episode.mp4',
+        addedAtMs: 456,
+        byteSize: 789,
+        positionMs: 90000,
+        durationMs: 1800000,
+        lastWatchedAtMs: 123456,
+      );
+
+      final restored = VideoTrack.fromJson(video.toJson());
+      final recategorized = restored.copyWith(category: VideoCategory.tvShow);
+
+      expect(restored.positionMs, 90000);
+      expect(restored.durationMs, 1800000);
+      expect(restored.lastWatchedAtMs, 123456);
+      expect(recategorized.category, VideoCategory.tvShow);
+      expect(recategorized.positionMs, restored.positionMs);
+      expect(restored.isResumable, isTrue);
+      expect(restored.playbackProgress, closeTo(.05, .0001));
+
+      expect(restored.copyWith(completed: true).isResumable, isFalse);
+      expect(
+        restored.copyWith(positionMs: restored.durationMs - 10000).isResumable,
+        isFalse,
+      );
     });
 
     test('older audio records without optional license fields still load', () {

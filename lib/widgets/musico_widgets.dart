@@ -142,7 +142,7 @@ class Pill extends StatelessWidget {
               width: 6,
               height: 6,
               decoration: BoxDecoration(
-                color: foreground ?? MusicoPalette.forest,
+                color: foreground ?? MusicoPalette.forestLight,
                 shape: BoxShape.circle,
               ),
             ),
@@ -368,7 +368,6 @@ class _PosterFallback extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: MusicoPalette.ink,
-                fontFamily: 'Space Grotesk',
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
                 height: 1.1,

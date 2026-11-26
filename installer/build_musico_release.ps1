@@ -42,11 +42,26 @@ function Get-VerifiedGitHubAsset {
   }
   $expectedHash = $digestMatch.Groups[1].Value
 
-  Invoke-WebRequest `
-    -Uri $asset.browser_download_url `
-    -Headers @{ 'User-Agent' = 'Musico-release-build' } `
-    -OutFile $Destination `
-    -UseBasicParsing
+  $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+  if ($curl) {
+    & $curl.Source `
+      --fail `
+      --location `
+      --show-error `
+      --retry 3 `
+      --connect-timeout 30 `
+      --output $Destination `
+      $asset.browser_download_url
+    if ($LASTEXITCODE -ne 0) {
+      throw "Download failed for $Repository/$AssetName with curl exit code $LASTEXITCODE."
+    }
+  } else {
+    Invoke-WebRequest `
+      -Uri $asset.browser_download_url `
+      -Headers @{ 'User-Agent' = 'Musico-release-build' } `
+      -OutFile $Destination `
+      -UseBasicParsing
+  }
 
   $actualHash = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash
   if ($actualHash -ne $expectedHash) {

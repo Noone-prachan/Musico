@@ -152,7 +152,6 @@ internal sealed class MusicoSetupForm : Form
         }
         catch (InvalidOperationException)
         {
-            // The window closed while the install was finishing.
         }
     }
 
@@ -267,7 +266,6 @@ internal static class InstallerEngine
             }
             catch
             {
-                // Logging must never break the install.
             }
         }
     }
@@ -679,7 +677,6 @@ internal static class InstallerEngine
         catch (UnauthorizedAccessException)
         {
             if (!File.Exists(destination)) throw;
-            // A previous run may have left the file read-only.
             File.SetAttributes(destination, FileAttributes.Normal);
             entry.ExtractToFile(destination, true);
         }

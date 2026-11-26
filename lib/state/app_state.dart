@@ -19,7 +19,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
-import '../models/media_download.dart';
 import '../models/media_title.dart';
 import '../models/music_playlist.dart';
 import '../models/music_track.dart';
@@ -29,7 +28,7 @@ import '../models/youtube_download.dart';
 import '../models/youtube_media.dart';
 import '../models/youtube_video_metadata.dart';
 import '../services/backup_service.dart';
-import '../services/direct_media_download_service.dart';
+import '../services/lyrics_record_selector.dart';
 import '../services/lyrics_title_matcher.dart';
 import '../services/openverse_artwork_service.dart';
 import '../services/synced_lyrics_parser.dart';
@@ -49,6 +48,7 @@ class AppState extends ChangeNotifier {
   static const _videosKey = 'sideb.native.videos.v1';
   static const _spotifyPlaylistsKey = 'sideb.native.spotify.playlists.v1';
   static const _musicPlaylistsKey = 'sideb.native.music.playlists.v1';
+  static const _favoriteTracksKey = 'sideb.native.music.favorites.v1';
   static const _backgroundKey = 'sideb.native.desktop.background-sync.v1';
   static const _notificationPermissionKey = 'sideb.native.notifications.v1';
   static const _sortAlphabeticallyKey = 'sideb.native.music.sort.v1';
@@ -134,8 +134,6 @@ class AppState extends ChangeNotifier {
   final Connectivity _connectivity = Connectivity();
   final http.Client _client = http.Client();
   final MusicoBackupService _backupService = MusicoBackupService();
-  late final DirectMediaDownloadService _directDownloadService =
-      DirectMediaDownloadService(_client);
   late final YouTubeMetadataService _youtubeMetadataService =
       YouTubeMetadataService(_client);
   late final YouTubeSearchService _youtubeSearchService = YouTubeSearchService(
@@ -154,6 +152,7 @@ class AppState extends ChangeNotifier {
   List<MediaTitle> watchlist = [];
   List<SpotifyPlaylist> spotifyPlaylists = [];
   List<MusicPlaylist> musicPlaylists = [];
+  Set<String> favoriteTrackIds = {};
   String? selectedMusicPlaylistId;
   final Set<String> artworkLookupsInProgress = {};
   final Set<String> artworkLookupAttempts = {};
@@ -174,13 +173,9 @@ class AppState extends ChangeNotifier {
   String? commonsSearchError;
   String? commonsEmptyMessage;
   String commonsQuery = '';
-  String? mediaDownloadConfigPath;
-  String? mediaDownloadErrorMessage;
-  String? configuredDownloadErrorMessage;
   String? spotifyPlaylistImportErrorMessage;
-  final Map<String, double?> configuredDownloadProgress = {};
-  Set<String> downloadingConfiguredIds = {};
   final Map<String, double?> youtubeDownloadProgress = {};
+  final Map<String, String> youtubeDownloadStages = {};
   Set<String> downloadingYouTubeIds = {};
   String? youtubeDownloadError;
   String? settingsErrorMessage;
@@ -210,16 +205,24 @@ class AppState extends ChangeNotifier {
   bool autoplay = true;
   double volume = 0.8;
   Timer? _desktopRefreshTimer;
+  Timer? _catalogRefreshTimer;
   Timer? _notificationTimer;
   Timer? _volumePersistTimer;
+  Timer? _videoProgressTimer;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  StreamSubscription<int?>? _androidQueueIndexSubscription;
+  StreamSubscription<PositionDiscontinuity>?
+  _androidPositionDiscontinuitySubscription;
+  List<MusicTrack> _androidPlaybackQueue = [];
+  bool _isReplacingAndroidPlaybackQueue = false;
   Future<void> _windowsMediaControlsUpdateQueue = Future<void>.value();
   bool _windowsMediaControlsPublished = false;
   bool _notificationsInitialized = false;
   bool _isDisposed = false;
+  bool _isSavingVideoProgress = false;
+  String? _pendingVideoResumeId;
   DateTime? _lyricsRetryAfter;
   int _lyricsRequestId = 0;
-  MediaDownloadConfig? mediaDownloadConfig;
   String? mediaStorageRoot;
   bool setupCompleted = false;
 
@@ -260,29 +263,45 @@ class AppState extends ChangeNotifier {
   String? youtubeSearchError;
 
   List<MusicTrack> get visibleTracks {
-    final query = trackQuery.trim().toLowerCase();
     final selectedPlaylist = musicPlaylists
         .where((playlist) => playlist.id == selectedMusicPlaylistId)
         .firstOrNull;
     final playlistTrackIds = selectedPlaylist?.trackIds.toSet();
-    final filtered = tracks.where((track) {
-      if (playlistTrackIds != null && !playlistTrackIds.contains(track.id)) {
-        return false;
-      }
-      final metadata = track.displayMetadata;
-      return query.isEmpty ||
-          '${metadata.title} ${metadata.artist} ${track.license ?? ""}'
-              .toLowerCase()
-              .contains(query);
-    }).toList();
-    filtered.sort(
+    return _sortMusicTracks(
+      tracks.where((track) {
+        return (playlistTrackIds == null ||
+                playlistTrackIds.contains(track.id)) &&
+            _matchesTrackQuery(track);
+      }),
+    );
+  }
+
+  List<MusicTrack> get visibleFavoriteTracks => _sortMusicTracks(
+    tracks.where(
+      (track) =>
+          favoriteTrackIds.contains(track.id) && _matchesTrackQuery(track),
+    ),
+  );
+
+  bool _matchesTrackQuery(MusicTrack track) {
+    final query = trackQuery.trim().toLowerCase();
+    if (query.isEmpty) return true;
+    final metadata = track.displayMetadata;
+    return '${metadata.title} ${metadata.artist} ${track.license ?? ""}'
+        .toLowerCase()
+        .contains(query);
+  }
+
+  List<MusicTrack> _sortMusicTracks(Iterable<MusicTrack> source) {
+    final sorted = source.toList();
+    sorted.sort(
       (a, b) => sortAlphabetically
           ? a.displayMetadata.title.toLowerCase().compareTo(
               b.displayMetadata.title.toLowerCase(),
             )
           : b.addedAtMs.compareTo(a.addedAtMs),
     );
-    return filtered;
+    return sorted;
   }
 
   List<MediaTitle> get visibleReleaseTitles {
@@ -331,6 +350,9 @@ class AppState extends ChangeNotifier {
       final preferences = await SharedPreferences.getInstance();
       watchlist = _decodeMediaList(preferences.getString(_watchlistKey));
       tracks = _decodeTrackList(preferences.getString(_tracksKey));
+      favoriteTrackIds = _decodeFavoriteTrackIds(
+        preferences.getString(_favoriteTracksKey),
+      )..removeWhere((id) => !tracks.any((track) => track.id == id));
       videoTracks = _decodeVideoList(preferences.getString(_videosKey));
       spotifyPlaylists = _decodeSpotifyPlaylistList(
         preferences.getString(_spotifyPlaylistsKey),
@@ -361,14 +383,6 @@ class AppState extends ChangeNotifier {
       musicErrorMessage = 'Your saved library could not be loaded.';
     }
 
-    try {
-      await _loadMediaDownloadConfig();
-    } on Object catch (error, stackTrace) {
-      debugPrint('Direct media links could not be loaded: $error\n$stackTrace');
-      mediaDownloadErrorMessage =
-          'The download links file could not be loaded. Check its JSON format.';
-    }
-
     await _initializeAudio();
     await _initializeConnectivity();
     unawaited(_lookupMissingTrackArtwork());
@@ -386,6 +400,7 @@ class AppState extends ChangeNotifier {
       _startDesktopRefresh();
     }
     await refreshAnime(silent: true, initialLoad: true);
+    _startCatalogRefresh();
     if (notificationsEnabled && _notificationsInitialized) {
       await syncWatchlistNotifications();
     }
@@ -393,6 +408,14 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _initializeAudio() async {
+    if (Platform.isAndroid) {
+      _androidPositionDiscontinuitySubscription = player
+          .positionDiscontinuityStream
+          .listen(_handleAndroidPositionDiscontinuity);
+      _androidQueueIndexSubscription = player.currentIndexStream.listen(
+        _handleAndroidQueueIndex,
+      );
+    }
     player.playerStateStream.listen((_) => _notify());
     player.playingStream.listen((_) => _scheduleWindowsMediaControlsSync());
     player.durationStream.listen((duration) {
@@ -459,14 +482,80 @@ class AppState extends ChangeNotifier {
   void _initializeVideoPlayer() {
     if (_videoPlayerListenersInitialized) return;
     final videoPlayer = this.videoPlayer;
-    videoPlayer.stream.playing.listen((_) => _notify());
+    videoPlayer.stream.playing.listen((playing) {
+      if (playing) {
+        _startVideoProgressPersistence();
+      } else {
+        _videoProgressTimer?.cancel();
+        unawaited(_saveVideoProgress());
+      }
+      _notify();
+    });
     videoPlayer.stream.position.listen((_) => _notify());
+    videoPlayer.stream.duration.listen((_) => _notify());
+    videoPlayer.stream.completed.listen((completed) {
+      if (completed) {
+        _videoProgressTimer?.cancel();
+        unawaited(_saveVideoProgress(completed: true));
+      }
+    });
     videoPlayer.stream.error.listen((message) {
       debugPrint('Video playback failed: $message');
       videoErrorMessage = 'This video could not be played on this device.';
       _notify();
     });
     _videoPlayerListenersInitialized = true;
+  }
+
+  void _startVideoProgressPersistence() {
+    _videoProgressTimer?.cancel();
+    _videoProgressTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      unawaited(_saveVideoProgress());
+    });
+  }
+
+  Future<void> _saveVideoProgress({bool completed = false}) async {
+    final video = currentVideo;
+    final videoPlayer = _videoPlayer;
+    if (video == null ||
+        videoPlayer == null ||
+        _pendingVideoResumeId == video.id ||
+        _isSavingVideoProgress) {
+      return;
+    }
+
+    final index = videoTracks.indexWhere((item) => item.id == video.id);
+    if (index < 0) return;
+
+    _isSavingVideoProgress = true;
+    final positionMs = videoPlayer.state.position.inMilliseconds
+        .clamp(0, 1 << 62)
+        .toInt();
+    final liveDurationMs = videoPlayer.state.duration.inMilliseconds
+        .clamp(0, 1 << 62)
+        .toInt();
+    final durationMs = liveDurationMs > 0 ? liveDurationMs : video.durationMs;
+    final reachedEnd =
+        completed || (durationMs > 0 && positionMs >= durationMs - 1500);
+    final updated = video.copyWith(
+      positionMs: reachedEnd ? durationMs : positionMs,
+      durationMs: durationMs,
+      lastWatchedAtMs: DateTime.now().millisecondsSinceEpoch,
+      completed: reachedEnd,
+    );
+    videoTracks[index] = updated;
+    currentVideo = updated;
+    try {
+      await _persistVideos();
+    } on Object catch (error, stackTrace) {
+      debugPrint(
+        'Video watch progress could not be saved: $error\n$stackTrace',
+      );
+      videoErrorMessage = 'Watch progress could not be saved on this device.';
+    } finally {
+      _isSavingVideoProgress = false;
+      _notify();
+    }
   }
 
   Future<void> _initializeNotifications() async {
@@ -495,7 +584,6 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Older IANA aliases are dropped from recent timezone databases.
   static String _canonicalTimeZone(String identifier) {
     const aliases = <String, String>{
       'Asia/Katmandu': 'Asia/Kathmandu',
@@ -534,12 +622,33 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  Set<String> _decodeFavoriteTrackIds(String? json) {
+    if (json == null) return {};
+    try {
+      final values = jsonDecode(json);
+      if (values is! List) {
+        throw const FormatException('The saved favorites are invalid.');
+      }
+      return {
+        for (final value in values)
+          if (value is String && value.isNotEmpty) value,
+      };
+    } on FormatException catch (error) {
+      debugPrint('Saved music favorites are invalid: $error');
+      return {};
+    } on TypeError catch (error) {
+      debugPrint('Saved music favorites have unexpected types: $error');
+      return {};
+    }
+  }
+
   List<VideoTrack> _decodeVideoList(String? json) {
     if (json == null) return [];
     try {
       return (jsonDecode(json) as List<dynamic>)
           .whereType<Map<String, dynamic>>()
           .map(VideoTrack.fromJson)
+          .map(_restoreYouTubeVideoMetadata)
           .where((video) => File(video.path).existsSync())
           .toList();
     } on FormatException catch (error) {
@@ -548,6 +657,46 @@ class AppState extends ChangeNotifier {
     } on TypeError catch (error) {
       debugPrint('Saved video metadata has unexpected types: $error');
       return [];
+    }
+  }
+
+  VideoTrack _restoreYouTubeVideoMetadata(VideoTrack video) {
+    if (video.videoId != null) return video;
+    final metadataFile = File(
+      YouTubeDownloadMetadata.pathFor(File(video.path)),
+    );
+    if (!metadataFile.existsSync()) return video;
+
+    try {
+      final decoded = jsonDecode(metadataFile.readAsStringSync());
+      if (decoded is! Map<String, dynamic> || decoded['source'] != 'youtube') {
+        return video;
+      }
+      final metadata = YouTubeDownloadMetadata.fromJson(decoded);
+      if (metadata.format != 'mp4' || metadata.videoId.isEmpty) return video;
+      final fileName = video.path.split(Platform.pathSeparator).last;
+      if (metadata.mediaFileName != null &&
+          metadata.mediaFileName != fileName) {
+        return video;
+      }
+      return video.copyWith(
+        sourceUrl: video.sourceUrl ?? metadata.videoUrl,
+        artist: video.artist ?? metadata.channel,
+        originalTitle: video.originalTitle ?? metadata.originalTitle,
+        videoId: metadata.videoId,
+        thumbnailUrl: video.thumbnailUrl ?? metadata.thumbnailUrl,
+        artworkPath: video.artworkPath ?? metadata.artworkPath,
+        quality: video.quality ?? metadata.quality,
+        durationMs: video.durationMs > 0
+            ? video.durationMs
+            : metadata.durationMs ?? 0,
+      );
+    } on Object catch (error, stackTrace) {
+      debugPrint(
+        'Downloaded video metadata could not be restored for '
+        '${video.path}: $error\n$stackTrace',
+      );
+      return video;
     }
   }
 
@@ -771,6 +920,7 @@ class AppState extends ChangeNotifier {
     if (downloadingYouTubeIds.contains(key)) return false;
     downloadingYouTubeIds = {...downloadingYouTubeIds, key};
     youtubeDownloadProgress[key] = 0;
+    youtubeDownloadStages[key] = 'Preparing download…';
     youtubeDownloadError = null;
     _notify();
 
@@ -790,6 +940,7 @@ class AppState extends ChangeNotifier {
       final artist = result.channel;
 
       String? chosenQuality;
+      YouTubeQuality? selectedQuality;
       if (format == YouTubeDownloadFormat.mp4) {
         final qualities = await _youtubeDownloadService.availableQualities(
           result.videoId,
@@ -802,6 +953,18 @@ class AppState extends ChangeNotifier {
             'No downloadable video quality is available for this video.',
           );
         }
+        for (final quality in qualities) {
+          if (quality.label == chosenQuality) {
+            selectedQuality = quality;
+            break;
+          }
+        }
+        if (selectedQuality == null) {
+          throw FormatException(
+            'The selected quality "$chosenQuality" is no longer available. '
+            'Choose another quality and retry.',
+          );
+        }
       }
 
       final ripRequest = YouTubeRipRequest(
@@ -812,6 +975,7 @@ class AppState extends ChangeNotifier {
         channel: artist,
         format: format,
         quality: chosenQuality,
+        formatId: selectedQuality?.itag,
         durationMs: result.duration?.inMilliseconds,
         thumbnailUrl: result.thumbnailUrl,
       );
@@ -825,6 +989,10 @@ class AppState extends ChangeNotifier {
             youtubeDownloadProgress[key] = progress;
             _notify();
           },
+          onStage: (stage) {
+            youtubeDownloadStages[key] = stage;
+            _notify();
+          },
         );
       } else {
         outcome = await _youtubeDownloadService.downloadVideo(
@@ -833,6 +1001,10 @@ class AppState extends ChangeNotifier {
           artworkDirectory: artworkDirectory,
           onProgress: (progress) {
             youtubeDownloadProgress[key] = progress;
+            _notify();
+          },
+          onStage: (stage) {
+            youtubeDownloadStages[key] = stage;
             _notify();
           },
         );
@@ -879,6 +1051,13 @@ class AppState extends ChangeNotifier {
             rights: 'YouTube download',
             attribution: artist,
             sourceUrl: result.videoUrl,
+            artist: artist,
+            originalTitle: result.title,
+            videoId: result.videoId,
+            thumbnailUrl: result.thumbnailUrl,
+            artworkPath: outcome.artwork?.path,
+            quality: chosenQuality,
+            durationMs: result.duration?.inMilliseconds ?? 0,
           ),
         );
         registered = true;
@@ -929,6 +1108,7 @@ class AppState extends ChangeNotifier {
       }
       downloadingYouTubeIds = {...downloadingYouTubeIds}..remove(key);
       youtubeDownloadProgress.remove(key);
+      youtubeDownloadStages.remove(key);
       _notify();
     }
   }
@@ -971,7 +1151,6 @@ class AppState extends ChangeNotifier {
     if (Platform.isWindows) {
       final candidates = <Directory>[];
 
-      // 1. If user configured a storage root, check if writable first
       if (mediaStorageRoot != null && mediaStorageRoot!.trim().isNotEmpty) {
         final selectedRoot = Directory(mediaStorageRoot!.trim());
         candidates.add(
@@ -980,7 +1159,6 @@ class AppState extends ChangeNotifier {
         candidates.add(selectedRoot);
       }
 
-      // 2. User Music and Downloads folders
       if (userProfile != null && userProfile.isNotEmpty) {
         candidates.add(
           Directory(
@@ -1004,7 +1182,6 @@ class AppState extends ChangeNotifier {
         );
       }
 
-      // 3. Application directory fallback
       final executableDirectory = File(Platform.resolvedExecutable).parent;
       candidates.add(
         Directory(
@@ -1017,7 +1194,6 @@ class AppState extends ChangeNotifier {
         ),
       );
 
-      // 4. LocalAppData/Musico
       if (localAppData != null && localAppData.isNotEmpty) {
         candidates.add(
           Directory(
@@ -1029,7 +1205,6 @@ class AppState extends ChangeNotifier {
         );
       }
 
-      // 5. System temp fallback
       final tempRoot = Directory.systemTemp.path;
       candidates.add(
         Directory(
@@ -1228,19 +1403,47 @@ class AppState extends ChangeNotifier {
     )) {
       return;
     }
+    if (favoriteTrackIds.contains(track.id)) {
+      final updatedFavorites = Set<String>.of(favoriteTrackIds)
+        ..remove(track.id);
+      if (!await _saveFavoriteTrackIds(updatedFavorites)) return;
+    }
     tracks = tracks.where((item) => item.id != track.id).toList();
     artworkErrors.remove(track.id);
     artworkLookupsInProgress.remove(track.id);
     artworkLookupAttempts.remove(track.id);
     if (currentTrack?.id == track.id) {
+      _androidPlaybackQueue = [];
       await player.stop();
       currentTrack = null;
+      currentVideo = null;
       _lyricsRequestId++;
       lyrics = null;
       lyricsErrorMessage = null;
       syncedLyricLines = [];
       lyricsStatus = LyricsStatus.idle;
       _scheduleWindowsMediaControlsSync();
+    } else if (Platform.isAndroid &&
+        _androidPlaybackQueue.any((item) => item.id == track.id)) {
+      final playingTrack = currentTrack;
+      final remainingQueue = _androidPlaybackQueue
+          .where((item) => item.id != track.id)
+          .toList();
+      if (playingTrack != null &&
+          remainingQueue.any((item) => item.id == playingTrack.id)) {
+        final position = player.position;
+        final wasPlaying = player.playing;
+        try {
+          await _loadAndroidPlaybackQueue(
+            remainingQueue,
+            selectedTrack: playingTrack,
+            initialPosition: position,
+          );
+          if (wasPlaying) _startAudioPlayback();
+        } on Object catch (error, stackTrace) {
+          _reportAudioPlaybackError(error, stackTrace);
+        }
+      }
     }
     try {
       await File(track.path).delete();
@@ -1308,16 +1511,23 @@ class AppState extends ChangeNotifier {
       if (isCurrentTrack) {
         if (wasPlaying) await player.pause();
         audioMetadataUpdateAttempted = true;
-        await player.setClip(
-          start: original.clipStartMs == null
-              ? null
-              : Duration(milliseconds: original.clipStartMs!),
-          end: original.clipEndMs == null
-              ? null
-              : Duration(milliseconds: original.clipEndMs!),
-          tag: _mediaItemForTrack(updated),
-        );
-        await player.seek(originalPosition);
+        if (Platform.isAndroid) {
+          await _reloadAndroidPlaybackQueueForTrack(
+            updated,
+            position: originalPosition,
+          );
+        } else {
+          await player.setClip(
+            start: original.clipStartMs == null
+                ? null
+                : Duration(milliseconds: original.clipStartMs!),
+            end: original.clipEndMs == null
+                ? null
+                : Duration(milliseconds: original.clipEndMs!),
+            tag: _mediaItemForTrack(updated),
+          );
+          await player.seek(originalPosition);
+        }
         currentTrack = updated;
         if (wasPlaying) _startAudioPlayback();
       }
@@ -1338,16 +1548,23 @@ class AppState extends ChangeNotifier {
       debugPrint('Track rename could not be applied: $error\n$stackTrace');
       if (audioMetadataUpdateAttempted && isCurrentTrack) {
         try {
-          await player.setClip(
-            start: original.clipStartMs == null
-                ? null
-                : Duration(milliseconds: original.clipStartMs!),
-            end: original.clipEndMs == null
-                ? null
-                : Duration(milliseconds: original.clipEndMs!),
-            tag: _mediaItemForTrack(original),
-          );
-          await player.seek(originalPosition);
+          if (Platform.isAndroid) {
+            await _reloadAndroidPlaybackQueueForTrack(
+              original,
+              position: originalPosition,
+            );
+          } else {
+            await player.setClip(
+              start: original.clipStartMs == null
+                  ? null
+                  : Duration(milliseconds: original.clipStartMs!),
+              end: original.clipEndMs == null
+                  ? null
+                  : Duration(milliseconds: original.clipEndMs!),
+              tag: _mediaItemForTrack(original),
+            );
+            await player.seek(originalPosition);
+          }
           currentTrack = original;
           if (wasPlaying) _startAudioPlayback();
         } on Object catch (rollbackError, rollbackStackTrace) {
@@ -1394,6 +1611,8 @@ class AppState extends ChangeNotifier {
         return;
       }
       if (currentVideo != null) {
+        _videoProgressTimer?.cancel();
+        await _saveVideoProgress();
         await videoPlayer.stop();
         currentVideo = null;
         await _setPictureInPictureEnabled(false);
@@ -1401,17 +1620,15 @@ class AppState extends ChangeNotifier {
       if (!await File(track.path).exists()) {
         throw FileSystemException('The audio file is missing.', track.path);
       }
-      final artworkPath = track.artworkPath;
-      final artworkUri = artworkPath != null && File(artworkPath).existsSync()
-          ? Uri.file(artworkPath)
-          : null;
       var playableTrack = track;
-      final sourceDuration = await player.setAudioSource(
-        AudioSource.file(
-          track.path,
-          tag: _mediaItemForTrack(track, artworkUri: artworkUri),
-        ),
-      );
+      final sourceDuration = Platform.isAndroid
+          ? await _loadAndroidPlaybackQueue(
+              _tracksForAndroidQueue(track),
+              selectedTrack: track,
+            )
+          : await player.setAudioSource(
+              AudioSource.file(track.path, tag: _mediaItemForTrack(track)),
+            );
       if (track.durationMs == 0 && sourceDuration != null) {
         playableTrack = track.copyWith(
           durationMs: sourceDuration.inMilliseconds,
@@ -1421,8 +1638,9 @@ class AppState extends ChangeNotifier {
             .toList();
         await _persistTracks();
       }
-      if (playableTrack.clipStartMs != null ||
-          playableTrack.clipEndMs != null) {
+      if (!Platform.isAndroid &&
+          (playableTrack.clipStartMs != null ||
+              playableTrack.clipEndMs != null)) {
         await player.setClip(
           start: playableTrack.clipStartMs == null
               ? null
@@ -1502,6 +1720,119 @@ class AppState extends ChangeNotifier {
       artUri: artUri,
       duration: durationMs == null ? null : Duration(milliseconds: durationMs),
     );
+  }
+
+  List<MusicTrack> _tracksForAndroidQueue(MusicTrack selectedTrack) {
+    final queue = visibleTracks;
+    if (!queue.any((track) => track.id == selectedTrack.id)) {
+      queue.insert(0, selectedTrack);
+    }
+    return queue;
+  }
+
+  AudioSource _audioSourceForTrack(MusicTrack track) {
+    final mediaItem = _mediaItemForTrack(track);
+    final source = AudioSource.file(track.path, tag: mediaItem);
+    if (track.clipStartMs == null && track.clipEndMs == null) return source;
+    return ClippingAudioSource(
+      child: source,
+      start: track.clipStartMs == null
+          ? null
+          : Duration(milliseconds: track.clipStartMs!),
+      end: track.clipEndMs == null
+          ? null
+          : Duration(milliseconds: track.clipEndMs!),
+      tag: mediaItem,
+    );
+  }
+
+  Future<Duration?> _loadAndroidPlaybackQueue(
+    List<MusicTrack> queue, {
+    required MusicTrack selectedTrack,
+    Duration initialPosition = Duration.zero,
+  }) async {
+    final initialIndex = queue.indexWhere(
+      (track) => track.id == selectedTrack.id,
+    );
+    if (initialIndex < 0) {
+      throw StateError(
+        'The selected track is missing from the playback queue.',
+      );
+    }
+
+    _androidPlaybackQueue = List.unmodifiable(queue);
+    _isReplacingAndroidPlaybackQueue = true;
+    try {
+      final duration = await player.setAudioSources(
+        queue.map(_audioSourceForTrack).toList(),
+        initialIndex: initialIndex,
+        initialPosition: initialPosition,
+      );
+      if (shuffle) await player.shuffle();
+      if (player.shuffleModeEnabled != shuffle) {
+        await player.setShuffleModeEnabled(shuffle);
+      }
+      return duration;
+    } finally {
+      _isReplacingAndroidPlaybackQueue = false;
+    }
+  }
+
+  Future<Duration?> _reloadAndroidPlaybackQueueForTrack(
+    MusicTrack track, {
+    Duration position = Duration.zero,
+  }) {
+    final queue = _androidPlaybackQueue.isEmpty
+        ? _tracksForAndroidQueue(track)
+        : _androidPlaybackQueue
+              .map((item) => item.id == track.id ? track : item)
+              .toList();
+    if (!queue.any((item) => item.id == track.id)) queue.add(track);
+    return _loadAndroidPlaybackQueue(
+      queue,
+      selectedTrack: track,
+      initialPosition: position,
+    );
+  }
+
+  void _handleAndroidQueueIndex(int? index) {
+    if (_isReplacingAndroidPlaybackQueue ||
+        index == null ||
+        index < 0 ||
+        index >= _androidPlaybackQueue.length) {
+      return;
+    }
+    final track = _androidPlaybackQueue[index];
+    if (currentTrack?.id == track.id) return;
+
+    currentTrack = track;
+    musicErrorMessage = null;
+    _lyricsRequestId++;
+    lyrics = null;
+    lyricsErrorMessage = null;
+    syncedLyricLines = [];
+    lyricsStatus = LyricsStatus.idle;
+    _scheduleWindowsMediaControlsSync();
+    unawaited(_ensureArtworkFor(track));
+    unawaited(fetchLyricsForCurrent());
+    _notify();
+  }
+
+  void _handleAndroidPositionDiscontinuity(
+    PositionDiscontinuity discontinuity,
+  ) {
+    if (_isReplacingAndroidPlaybackQueue ||
+        discontinuity.reason != PositionDiscontinuityReason.autoAdvance) {
+      return;
+    }
+
+    final previousIndex = discontinuity.previousEvent.currentIndex;
+    if (previousIndex == null) return;
+    if (repeatOne) {
+      unawaited(player.seek(Duration.zero, index: previousIndex));
+    } else if (!autoplay) {
+      unawaited(player.pause());
+    }
   }
 
   void _scheduleWindowsMediaControlsSync() {
@@ -1591,6 +1922,7 @@ class AppState extends ChangeNotifier {
     var audioChangeAttempted = false;
     final isCurrentTrack = currentTrack?.id == trackId;
     final wasPlaying = isCurrentTrack && player.playing;
+    final originalPosition = isCurrentTrack ? player.position : Duration.zero;
     try {
       preferences = await SharedPreferences.getInstance();
       originalTrackData = preferences.getString(_tracksKey);
@@ -1604,12 +1936,16 @@ class AppState extends ChangeNotifier {
       if (isCurrentTrack) {
         if (wasPlaying) await player.pause();
         audioChangeAttempted = true;
-        await player.setClip(
-          start: startMs == 0 ? null : Duration(milliseconds: startMs),
-          end: endMs == null ? null : Duration(milliseconds: endMs),
-          tag: _mediaItemForTrack(updated),
-        );
-        await player.seek(Duration.zero);
+        if (Platform.isAndroid) {
+          await _reloadAndroidPlaybackQueueForTrack(updated);
+        } else {
+          await player.setClip(
+            start: startMs == 0 ? null : Duration(milliseconds: startMs),
+            end: endMs == null ? null : Duration(milliseconds: endMs),
+            tag: _mediaItemForTrack(updated),
+          );
+          await player.seek(Duration.zero);
+        }
         currentTrack = updated;
         if (wasPlaying) _startAudioPlayback();
       }
@@ -1622,15 +1958,23 @@ class AppState extends ChangeNotifier {
       debugPrint('Track trim could not be applied: $error\n$stackTrace');
       if (audioChangeAttempted && isCurrentTrack) {
         try {
-          await player.setClip(
-            start: track.clipStartMs == null
-                ? null
-                : Duration(milliseconds: track.clipStartMs!),
-            end: track.clipEndMs == null
-                ? null
-                : Duration(milliseconds: track.clipEndMs!),
-            tag: _mediaItemForTrack(track),
-          );
+          if (Platform.isAndroid) {
+            await _reloadAndroidPlaybackQueueForTrack(
+              track,
+              position: originalPosition,
+            );
+          } else {
+            await player.setClip(
+              start: track.clipStartMs == null
+                  ? null
+                  : Duration(milliseconds: track.clipStartMs!),
+              end: track.clipEndMs == null
+                  ? null
+                  : Duration(milliseconds: track.clipEndMs!),
+              tag: _mediaItemForTrack(track),
+            );
+            await player.seek(originalPosition);
+          }
           if (wasPlaying) _startAudioPlayback();
         } on Object catch (rollbackError, rollbackStackTrace) {
           debugPrint(
@@ -1738,26 +2082,11 @@ class AppState extends ChangeNotifier {
 
     final position = player.position;
     final wasPlaying = player.playing;
-    final mediaItem = _mediaItemForTrack(track);
     try {
-      await player.setAudioSource(
-        AudioSource.file(track.path, tag: mediaItem),
-        initialPosition: position,
-      );
-      if (track.clipStartMs != null || track.clipEndMs != null) {
-        await player.setClip(
-          start: track.clipStartMs == null
-              ? null
-              : Duration(milliseconds: track.clipStartMs!),
-          end: track.clipEndMs == null
-              ? null
-              : Duration(milliseconds: track.clipEndMs!),
-          tag: mediaItem,
-        );
-        await player.seek(position);
-      }
+      if (wasPlaying) await player.pause();
+      await _reloadAndroidPlaybackQueueForTrack(track, position: position);
       if (wasPlaying && currentTrack?.id == track.id && !player.playing) {
-        await player.play();
+        _startAudioPlayback();
       }
     } on Object catch (error, stackTrace) {
       debugPrint(
@@ -1810,7 +2139,9 @@ class AppState extends ChangeNotifier {
 
   Future<void> seek(Duration position) async => player.seek(position);
 
-  Future<void> pickVideoFiles() async {
+  Future<void> pickVideoFiles({
+    VideoCategory category = VideoCategory.other,
+  }) async {
     try {
       final result = await FilePicker.pickFiles(type: FileType.video);
       if (result.isEmpty) return;
@@ -1839,6 +2170,7 @@ class AppState extends ChangeNotifier {
             path: destination.path,
             addedAtMs: DateTime.now().millisecondsSinceEpoch,
             byteSize: await destination.length(),
+            category: category,
           ),
         );
       }
@@ -1863,8 +2195,12 @@ class AppState extends ChangeNotifier {
 
   Future<void> playVideo(VideoTrack video) async {
     try {
+      await _saveVideoProgress();
+      _videoProgressTimer?.cancel();
+      _androidPlaybackQueue = [];
       await player.stop();
       currentTrack = null;
+      currentVideo = null;
       _lyricsRequestId++;
       syncedLyricLines = [];
       _scheduleWindowsMediaControlsSync();
@@ -1874,12 +2210,34 @@ class AppState extends ChangeNotifier {
       lyricsErrorMessage = null;
       lyricsStatus = LyricsStatus.idle;
       videoErrorMessage = null;
-      await videoPlayer.open(Media(video.path));
-      currentVideo = video;
+      final resumeVideo = video.completed
+          ? video.copyWith(positionMs: 0, completed: false)
+          : video;
+      _pendingVideoResumeId = video.id;
+      await videoPlayer.open(Media(video.path), play: false);
+      currentVideo = resumeVideo;
+      final knownDuration = videoPlayer.state.duration;
+      final duration = knownDuration > Duration.zero
+          ? knownDuration
+          : await videoPlayer.stream.duration
+                .firstWhere((value) => value > Duration.zero)
+                .timeout(
+                  const Duration(seconds: 5),
+                  onTimeout: () => Duration.zero,
+                );
+      final resumePosition = Duration(milliseconds: resumeVideo.positionMs);
+      final canResume =
+          duration > Duration.zero &&
+          resumePosition >= const Duration(seconds: 30) &&
+          duration - resumePosition > const Duration(seconds: 15);
+      if (canResume) await videoPlayer.seek(resumePosition);
+      _pendingVideoResumeId = null;
+      await videoPlayer.play();
       await _setPictureInPictureEnabled(true);
-      unawaited(fetchLyricsForCurrent());
       musicErrorMessage = null;
     } on Object catch (error, stackTrace) {
+      _pendingVideoResumeId = null;
+      currentVideo = null;
       debugPrint('Video playback could not start: $error\n$stackTrace');
       videoErrorMessage = 'This video could not be played on this device.';
       lyricsStatus = LyricsStatus.idle;
@@ -1890,6 +2248,8 @@ class AppState extends ChangeNotifier {
 
   Future<void> stopVideo() async {
     _lyricsRequestId++;
+    _videoProgressTimer?.cancel();
+    await _saveVideoProgress();
     final videoPlayer = _videoPlayer;
     if (videoPlayer != null) await videoPlayer.stop();
     await _setPictureInPictureEnabled(false);
@@ -1901,7 +2261,28 @@ class AppState extends ChangeNotifier {
     _notify();
   }
 
+  Future<void> categorizeVideo(VideoTrack video, VideoCategory category) async {
+    final index = videoTracks.indexWhere((item) => item.id == video.id);
+    if (index < 0) return;
+    final original = videoTracks[index];
+    videoTracks[index] = original.copyWith(category: category);
+    try {
+      await _persistVideos();
+      videoErrorMessage = null;
+    } on Object catch (error, stackTrace) {
+      debugPrint('Video category could not be saved: $error\n$stackTrace');
+      videoTracks[index] = original;
+      videoErrorMessage = 'This video category could not be saved.';
+    } finally {
+      _notify();
+    }
+  }
+
   Future<void> removeVideo(VideoTrack video) async {
+    if (currentVideo?.id == video.id) {
+      _videoProgressTimer?.cancel();
+      await _saveVideoProgress();
+    }
     videoTracks = videoTracks.where((item) => item.id != video.id).toList();
     if (currentVideo?.id == video.id) {
       _lyricsRequestId++;
@@ -1920,7 +2301,38 @@ class AppState extends ChangeNotifier {
       videoErrorMessage =
           'Removed video could not be deleted from this device.';
     }
-    await _persistVideos();
+    if (video.videoId != null) {
+      final metadataFile = File(
+        YouTubeDownloadMetadata.pathFor(File(video.path)),
+      );
+      try {
+        if (await metadataFile.exists()) await metadataFile.delete();
+      } on FileSystemException catch (error, stackTrace) {
+        debugPrint(
+          'Removed video metadata could not be deleted: $error\n$stackTrace',
+        );
+        videoErrorMessage = 'Video metadata could not be removed.';
+      }
+    }
+    if (video.artworkPath case final artworkPath?) {
+      final artworkFile = File(artworkPath);
+      try {
+        if (await artworkFile.exists()) await artworkFile.delete();
+      } on FileSystemException catch (error, stackTrace) {
+        debugPrint(
+          'Removed video artwork could not be deleted: $error\n$stackTrace',
+        );
+        videoErrorMessage = 'Video artwork could not be removed.';
+      }
+    }
+    try {
+      await _persistVideos();
+    } on Object catch (error, stackTrace) {
+      debugPrint(
+        'The updated video library could not be saved: $error\n$stackTrace',
+      );
+      videoErrorMessage = 'The updated video library could not be saved.';
+    }
     _notify();
   }
 
@@ -2031,6 +2443,7 @@ class AppState extends ChangeNotifier {
     final durationSeconds = (metadata.$3 / 1000).round();
     final headers = const {'User-Agent': 'Musico/1.0 (offline media player)'};
 
+    Map<String, dynamic>? exactFallback;
     if (knownArtist) {
       final query = <String, String>{
         'track_name': title,
@@ -2044,9 +2457,10 @@ class AppState extends ChangeNotifier {
         headers,
       );
       if (exact.statusCode == 200) {
-        return jsonDecode(exact.body) as Map<String, dynamic>;
-      }
-      if (exact.statusCode != 404) {
+        final record = jsonDecode(exact.body) as Map<String, dynamic>;
+        if (hasSyncedLyricsRecord(record)) return record;
+        exactFallback = record;
+      } else if (exact.statusCode != 404) {
         throw HttpException('The lyrics service returned ${exact.statusCode}.');
       }
     }
@@ -2063,42 +2477,14 @@ class AppState extends ChangeNotifier {
     }
     final records = (jsonDecode(search.body) as List<dynamic>)
         .whereType<Map<String, dynamic>>()
-        .where(
-          (record) => lyricsTitleMatches(
-            title,
-            record['trackName'] as String? ?? record['name'] as String? ?? '',
-          ),
-        )
         .toList();
-    final matchingArtist = knownArtist
-        ? records
-              .where(
-                (record) =>
-                    (record['artistName'] as String? ?? '')
-                        .trim()
-                        .toLowerCase() ==
-                    artist.toLowerCase(),
-              )
-              .toList()
-        : records;
-    if (knownArtist && matchingArtist.isEmpty) return null;
-    final candidates = matchingArtist.isNotEmpty ? matchingArtist : records;
-    if (candidates.isEmpty) return null;
-
-    if (durationSeconds > 0) {
-      final durationMatches = candidates
-          .where(
-            (record) =>
-                (((record['duration'] as num?)?.toDouble() ?? -100) -
-                        durationSeconds)
-                    .abs() <=
-                2,
-          )
-          .toList();
-      if (durationMatches.isNotEmpty) return durationMatches.first;
-    }
-    if (candidates.length == 1 || knownArtist) return candidates.first;
-    return null;
+    return selectLyricsRecord(
+          records,
+          title: title,
+          artist: knownArtist ? artist : '',
+          durationSeconds: durationSeconds,
+        ) ??
+        exactFallback;
   }
 
   Future<http.Response> _getLyricsResponse(
@@ -2172,7 +2558,20 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> toggleShuffle() async {
-    shuffle = !shuffle;
+    final nextShuffle = !shuffle;
+    if (Platform.isAndroid && _androidPlaybackQueue.length > 1) {
+      try {
+        if (nextShuffle) await player.shuffle();
+        await player.setShuffleModeEnabled(nextShuffle);
+      } on Object catch (error, stackTrace) {
+        debugPrint('Shuffle mode could not be applied: $error\n$stackTrace');
+        musicErrorMessage =
+            'Shuffle could not be applied to playback. Try again.';
+        _notify();
+        return;
+      }
+    }
+    shuffle = nextShuffle;
     await _saveBooleanPreference(_shuffleKey, shuffle, 'shuffle');
     _notify();
   }
@@ -2696,153 +3095,6 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  bool isConfiguredDownloadSaved(MediaDownloadLink item) {
-    final id = 'direct-${item.progressKey.replaceAll(':', '-')}';
-    return switch (item.category) {
-      MediaDownloadCategory.music => tracks.any((track) => track.id == id),
-      MediaDownloadCategory.video ||
-      MediaDownloadCategory.anime => videoTracks.any((video) => video.id == id),
-    };
-  }
-
-  MediaDownloadLink? configuredDownloadForSpotifyTrack(
-    SpotifyPlaylistTrack track,
-  ) {
-    for (final download
-        in mediaDownloadConfig?.forCategory(MediaDownloadCategory.music) ??
-            const <MediaDownloadLink>[]) {
-      if (track.matchesDownload(download)) return download;
-    }
-    return null;
-  }
-
-  Future<bool> downloadConfiguredMedia(MediaDownloadLink item) async {
-    final configured = mediaDownloadConfig
-        ?.forCategory(item.category)
-        .any(
-          (candidate) => candidate.id == item.id && candidate.url == item.url,
-        );
-    if (configured != true) {
-      configuredDownloadErrorMessage =
-          'This download link is not in the active configuration.';
-      _notify();
-      return false;
-    }
-
-    final key = item.progressKey;
-    if (isConfiguredDownloadSaved(item)) {
-      configuredDownloadErrorMessage = 'This media is already saved locally.';
-      _notify();
-      return false;
-    }
-    if (downloadingConfiguredIds.contains(key)) return false;
-
-    downloadingConfiguredIds = {...downloadingConfiguredIds, key};
-    configuredDownloadProgress[key] = null;
-    configuredDownloadErrorMessage = null;
-    _notify();
-
-    final trackId = 'direct-${key.replaceAll(':', '-')}';
-    File? destination;
-    var registered = false;
-    try {
-      final mediaDirectory = await _mediaStorageDirectory(
-        item.category == MediaDownloadCategory.music ? 'music' : 'videos',
-      );
-      final downloaded = await _directDownloadService.download(
-        item,
-        mediaDirectory,
-        onProgress: (progress) {
-          configuredDownloadProgress[key] = progress;
-          _notify();
-        },
-      );
-      destination = downloaded.file;
-
-      final savedAt = DateTime.now().millisecondsSinceEpoch;
-      if (item.category == MediaDownloadCategory.music) {
-        tracks = [
-          MusicTrack(
-            id: trackId,
-            title: item.title,
-            artist: item.artist ?? 'Direct download',
-            path: destination.path,
-            durationMs: 0,
-            addedAtMs: savedAt,
-            license: item.rights.label,
-            licenseUrl: item.licenseUrl,
-            sourceUrl: item.url,
-            commonsPageId: null,
-            byteSize: downloaded.byteSize,
-            attribution: item.attribution,
-          ),
-          ...tracks,
-        ];
-        registered = true;
-        await _persistTracks();
-      } else {
-        videoTracks.insert(
-          0,
-          VideoTrack(
-            id: trackId,
-            title: item.title,
-            path: destination.path,
-            addedAtMs: savedAt,
-            byteSize: downloaded.byteSize,
-            rights: item.rights.label,
-            attribution: item.attribution,
-            sourceUrl: item.url,
-          ),
-        );
-        registered = true;
-        await _persistVideos();
-      }
-      configuredDownloadErrorMessage = null;
-      return true;
-    } on Object catch (error, stackTrace) {
-      debugPrint(
-        'Configured media download failed for ${item.id}: $error\n$stackTrace',
-      );
-      if (registered) {
-        tracks = tracks.where((track) => track.id != trackId).toList();
-        videoTracks = videoTracks
-            .where((video) => video.id != trackId)
-            .toList();
-        try {
-          if (item.category == MediaDownloadCategory.music) {
-            await _persistTracks();
-          } else {
-            await _persistVideos();
-          }
-        } on Object catch (persistError, persistStackTrace) {
-          debugPrint(
-            'The failed direct download could not be removed from the library: $persistError\n$persistStackTrace',
-          );
-        }
-        registered = false;
-      }
-      configuredDownloadErrorMessage = error is HttpException
-          ? error.message
-          : error is FormatException
-          ? error.message
-          : 'The media file could not be downloaded. Check the URL and your connection.';
-      return false;
-    } finally {
-      if (destination != null && !registered && await destination.exists()) {
-        try {
-          await destination.delete();
-        } on FileSystemException catch (error, stackTrace) {
-          debugPrint(
-            'Incomplete configured download could not be removed: $error\n$stackTrace',
-          );
-        }
-      }
-      downloadingConfiguredIds = {...downloadingConfiguredIds}..remove(key);
-      configuredDownloadProgress.remove(key);
-      _notify();
-    }
-  }
-
   bool hasTrack(MusicResult result) =>
       tracks.any((track) => track.commonsPageId == result.pageId);
 
@@ -2867,6 +3119,13 @@ class AppState extends ChangeNotifier {
       if (backgroundAutoRefresh) {
         unawaited(refreshAnime(silent: true));
       }
+    });
+  }
+
+  void _startCatalogRefresh() {
+    _catalogRefreshTimer?.cancel();
+    _catalogRefreshTimer = Timer.periodic(const Duration(hours: 6), (_) {
+      if (isOnline) unawaited(refreshAnime(silent: true));
     });
   }
 
@@ -2905,6 +3164,37 @@ class AppState extends ChangeNotifier {
       musicErrorMessage =
           'Your playlist changes could not be saved. Musico could not write '
           'to its storage folder.';
+      _notify();
+      return false;
+    }
+  }
+
+  Future<bool> toggleFavoriteTrack(String trackId) async {
+    if (!tracks.any((track) => track.id == trackId)) {
+      musicErrorMessage = 'That track is no longer available.';
+      _notify();
+      return false;
+    }
+    final updated = Set<String>.of(favoriteTrackIds);
+    if (!updated.add(trackId)) updated.remove(trackId);
+    return _saveFavoriteTrackIds(updated);
+  }
+
+  Future<bool> _saveFavoriteTrackIds(Set<String> favorites) async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      final saved = await preferences.setString(
+        _favoriteTracksKey,
+        jsonEncode(favorites.toList()),
+      );
+      if (!saved) throw StateError('Music favorites were not saved.');
+      favoriteTrackIds = favorites;
+      musicErrorMessage = null;
+      _notify();
+      return true;
+    } on Object catch (error, stackTrace) {
+      debugPrint('Music favorites could not be saved: $error\n$stackTrace');
+      musicErrorMessage = 'Your favorites could not be saved. Musico could not write to its storage folder.';
       _notify();
       return false;
     }
@@ -3003,10 +3293,11 @@ class AppState extends ChangeNotifier {
 
   Future<void> _persistVideos() async {
     final preferences = await SharedPreferences.getInstance();
-    await preferences.setString(
+    final saved = await preferences.setString(
       _videosKey,
       jsonEncode(videoTracks.map((video) => video.toJson()).toList()),
     );
+    if (!saved) throw StateError('The video library could not be saved.');
   }
 
   Future<void> _persistWatchlist() async {
@@ -3068,17 +3359,33 @@ class AppState extends ChangeNotifier {
         final video = videoTracks[index];
         final path = _backupAssetPath('videos', index, video.path);
         final metadata = video.toJson()..remove('path');
-        videoEntries.add({'video': metadata, 'archivePath': path});
+        final artworkPath = video.artworkPath;
+        metadata.remove('artworkPath');
+        final artworkFile = artworkPath == null ? null : File(artworkPath);
+        String? artworkArchivePath;
+        if (artworkFile != null && await artworkFile.exists()) {
+          artworkArchivePath = _backupAssetPath(
+            'artwork',
+            index,
+            artworkFile.path,
+          );
+        }
+        videoEntries.add({
+          'video': metadata,
+          'archivePath': path,
+          'artworkArchivePath': artworkArchivePath,
+        });
         assets.add(BackupAsset(archivePath: path, file: File(video.path)));
+        if (artworkArchivePath != null && artworkFile != null) {
+          assets.add(
+            BackupAsset(archivePath: artworkArchivePath, file: artworkFile),
+          );
+        }
       }
 
-      final downloadConfig = mediaDownloadConfig;
-      if (downloadConfig == null) {
-        throw StateError('The direct download links are not available.');
-      }
       final manifest = <String, dynamic>{
         'format': 'side-b-backup',
-        'schemaVersion': 4,
+        'schemaVersion': 5,
         'createdAt': DateTime.now().toUtc().toIso8601String(),
         'settings': {
           'backgroundAutoRefresh': backgroundAutoRefresh,
@@ -3099,8 +3406,8 @@ class AppState extends ChangeNotifier {
             .map((playlist) => playlist.toJson())
             .toList(),
         'selectedMusicPlaylistId': selectedMusicPlaylistId,
+        'favoriteTrackIds': favoriteTrackIds.toList(),
         'videoTracks': videoEntries,
-        'mediaDownloads': downloadConfig.encode(),
         'spotifyPlaylists': spotifyPlaylists
             .map((playlist) => playlist.toJson())
             .toList(),
@@ -3172,9 +3479,6 @@ class AppState extends ChangeNotifier {
 
     Directory? operationDirectory;
     final createdFiles = <File>[];
-    String? downloadPathToRestore;
-    String? originalDownloadConfig;
-    bool downloadConfigReplaced = false;
     SharedPreferences? preferencesToRestore;
     Map<String, Object?>? originalPreferences;
     bool preferenceWritesStarted = false;
@@ -3215,7 +3519,7 @@ class AppState extends ChangeNotifier {
       );
       final manifest = restored.manifest;
       if (manifest['format'] != 'side-b-backup' ||
-          !{1, 2, 3, 4}.contains(manifest['schemaVersion'])) {
+          !{1, 2, 3, 4, 5}.contains(manifest['schemaVersion'])) {
         throw const FormatException('This is not a supported Musico backup.');
       }
 
@@ -3248,15 +3552,6 @@ class AppState extends ChangeNotifier {
         throw const FormatException('The backup volume setting is invalid.');
       }
       final restoredVolume = rawVolume.toDouble().clamp(0, 1).toDouble();
-
-      final rawDownloadConfig = manifest['mediaDownloads'];
-      final restoredDownloadConfig = rawDownloadConfig is String
-          ? MediaDownloadConfig.decode(rawDownloadConfig)
-          : rawDownloadConfig == null && manifest['schemaVersion'] == 1
-          ? MediaDownloadConfig.empty()
-          : throw const FormatException(
-              'The direct download links are missing from the backup.',
-            );
 
       final rawSpotifyPlaylists = manifest['spotifyPlaylists'];
       final restoredSpotifyPlaylists = rawSpotifyPlaylists is List
@@ -3302,6 +3597,24 @@ class AppState extends ChangeNotifier {
           )
           ? rawSelectedPlaylistId as String?
           : null;
+      final rawFavoriteTrackIds = manifest['favoriteTrackIds'];
+      if (rawFavoriteTrackIds == null &&
+          (manifest['schemaVersion'] as int) >= 5) {
+        throw const FormatException('The backup music favorites are missing.');
+      }
+      if (rawFavoriteTrackIds != null && rawFavoriteTrackIds is! List) {
+        throw const FormatException('The backup music favorites are invalid.');
+      }
+      final restoredFavoriteTrackIds = <String>{
+        for (final trackId
+            in (rawFavoriteTrackIds as List<dynamic>? ?? const []))
+          if (trackId is String)
+            trackId
+          else
+            throw const FormatException(
+              'The backup contains invalid music favorites.',
+            ),
+      };
 
       List<MediaTitle> decodeMediaList(String key) {
         final values = manifest[key];
@@ -3378,7 +3691,8 @@ class AppState extends ChangeNotifier {
         ));
       }
 
-      final pendingVideos = <({Map<String, dynamic> json, File file})>[];
+      final pendingVideos =
+          <({Map<String, dynamic> json, File file, File? artworkFile})>[];
       for (final entry in rawVideos) {
         if (entry is! Map<String, dynamic> ||
             entry['video'] is! Map<String, dynamic> ||
@@ -3403,7 +3717,28 @@ class AppState extends ChangeNotifier {
         final metadata = Map<String, dynamic>.from(
           entry['video'] as Map<String, dynamic>,
         );
-        pendingVideos.add((json: metadata, file: asset));
+        final rawArtworkArchivePath = entry['artworkArchivePath'];
+        File? artworkFile;
+        if (rawArtworkArchivePath != null) {
+          if (rawArtworkArchivePath is! String ||
+              !rawArtworkArchivePath.startsWith('media/artwork/') ||
+              !expectedAssetPaths.add(rawArtworkArchivePath)) {
+            throw const FormatException(
+              'The backup contains an invalid video artwork path.',
+            );
+          }
+          artworkFile = restored.assets[rawArtworkArchivePath];
+          if (artworkFile == null) {
+            throw const FormatException(
+              'A video artwork file is missing from the backup.',
+            );
+          }
+        }
+        pendingVideos.add((
+          json: metadata,
+          file: asset,
+          artworkFile: artworkFile,
+        ));
       }
       if (expectedAssetPaths.length != restored.assets.length) {
         throw const FormatException(
@@ -3421,6 +3756,13 @@ class AppState extends ChangeNotifier {
       )) {
         throw const FormatException(
           'The backup contains playlists that refer to missing tracks.',
+        );
+      }
+      if (restoredFavoriteTrackIds.any(
+        (trackId) => !restoredTrackIds.contains(trackId),
+      )) {
+        throw const FormatException(
+          'The backup contains favorites that refer to missing tracks.',
         );
       }
 
@@ -3474,21 +3816,44 @@ class AppState extends ChangeNotifier {
         );
         await pending.file.copy(destination.path);
         createdFiles.add(destination);
-        restoredVideos.add(
-          VideoTrack.fromJson({
-            ...pending.json,
-            'path': destination.path,
-            'byteSize': await destination.length(),
-          }),
-        );
+        File? artworkDestination;
+        if (pending.artworkFile case final artworkFile?) {
+          artworkDestination = File(
+            '${artworkDirectory.path}${Platform.pathSeparator}restore-$stamp-${index.toString().padLeft(6, '0')}${_backupExtension(artworkFile.path)}',
+          );
+          await artworkFile.copy(artworkDestination.path);
+          createdFiles.add(artworkDestination);
+        }
+        final restoredVideo = VideoTrack.fromJson({
+          ...pending.json,
+          'path': destination.path,
+          'artworkPath': artworkDestination?.path,
+          'byteSize': await destination.length(),
+        });
+        restoredVideos.add(restoredVideo);
+        if (restoredVideo.videoId case final videoId?) {
+          final metadataFile = await YouTubeDownloadMetadata(
+            requestedName: restoredVideo.title,
+            originalTitle: restoredVideo.originalTitle ?? restoredVideo.title,
+            channel: restoredVideo.artist ?? restoredVideo.attribution ?? '',
+            videoId: videoId,
+            videoUrl:
+                restoredVideo.sourceUrl ??
+                'https://www.youtube.com/watch?v=$videoId',
+            format: 'mp4',
+            savedAtMs: restoredVideo.addedAtMs,
+            quality: restoredVideo.quality,
+            durationMs: restoredVideo.durationMs > 0
+                ? restoredVideo.durationMs
+                : null,
+            thumbnailUrl: restoredVideo.thumbnailUrl,
+            artworkPath: restoredVideo.artworkPath,
+            mediaFileName: _basename(destination.path),
+            byteSize: restoredVideo.byteSize,
+          ).writeNextTo(destination);
+          createdFiles.add(metadataFile);
+        }
       }
-
-      final downloadPath = mediaDownloadConfigPath;
-      if (downloadPath == null) {
-        throw StateError('The direct download links are not initialized.');
-      }
-      downloadPathToRestore = downloadPath;
-      originalDownloadConfig = await File(downloadPath).readAsString();
 
       final preferences = await SharedPreferences.getInstance();
       preferencesToRestore = preferences;
@@ -3497,6 +3862,7 @@ class AppState extends ChangeNotifier {
         _videosKey: preferences.getString(_videosKey),
         _spotifyPlaylistsKey: preferences.getString(_spotifyPlaylistsKey),
         _musicPlaylistsKey: preferences.getString(_musicPlaylistsKey),
+        _favoriteTracksKey: preferences.getString(_favoriteTracksKey),
         _watchlistKey: preferences.getString(_watchlistKey),
         _seasonCacheKey: preferences.getString(_seasonCacheKey),
         _upcomingCacheKey: preferences.getString(_upcomingCacheKey),
@@ -3510,10 +3876,6 @@ class AppState extends ChangeNotifier {
         _autoplayKey: preferences.getBool(_autoplayKey),
         _volumeKey: preferences.getDouble(_volumeKey),
       };
-
-      downloadConfigReplaced = true;
-      await File(downloadPath)
-          .writeAsString(restoredDownloadConfig.encode(), flush: true);
 
       preferenceWritesStarted = true;
       final preferenceWrites = await Future.wait([
@@ -3541,6 +3903,10 @@ class AppState extends ChangeNotifier {
                 .toList(),
             'selectedId': restoredSelectedPlaylistId,
           }),
+        ),
+        preferences.setString(
+          _favoriteTracksKey,
+          jsonEncode(restoredFavoriteTrackIds.toList()),
         ),
         preferences.setString(
           _watchlistKey,
@@ -3577,6 +3943,7 @@ class AppState extends ChangeNotifier {
       restoreCommitted = true;
 
       try {
+        _androidPlaybackQueue = [];
         await player.stop();
       } on Object catch (error, stackTrace) {
         debugPrint(
@@ -3606,6 +3973,7 @@ class AppState extends ChangeNotifier {
       videoTracks = restoredVideos;
       spotifyPlaylists = restoredSpotifyPlaylists;
       musicPlaylists = restoredMusicPlaylists;
+      favoriteTrackIds = restoredFavoriteTrackIds;
       selectedMusicPlaylistId = restoredSelectedPlaylistId;
       watchlist = restoredWatchlist;
       seasonTitles = restoredSeasonTitles;
@@ -3617,8 +3985,6 @@ class AppState extends ChangeNotifier {
       repeatOne = restoredRepeatOne;
       autoplay = restoredAutoplay;
       volume = restoredVolume;
-      mediaDownloadConfig = restoredDownloadConfig;
-      mediaDownloadErrorMessage = null;
       try {
         await player.setVolume(volume);
       } on Object catch (error, stackTrace) {
@@ -3682,24 +4048,10 @@ class AppState extends ChangeNotifier {
           rollbackFailed = true;
         }
       }
-      if (!restoreCommitted &&
-          downloadConfigReplaced &&
-          downloadPathToRestore != null &&
-          originalDownloadConfig != null) {
-        try {
-          await File(downloadPathToRestore)
-              .writeAsString(originalDownloadConfig, flush: true);
-        } on Object catch (rollbackError, rollbackStackTrace) {
-          debugPrint(
-            'The original download links could not be restored: $rollbackError\n$rollbackStackTrace',
-          );
-          rollbackFailed = true;
-        }
-      }
       backupErrorMessage = error is FormatException
           ? error.message
           : rollbackFailed
-          ? 'Restore failed and rollback could not finish. Check your saved library and download links.'
+          ? 'Restore failed and rollback could not finish. Check your saved library and settings.'
           : 'The backup could not be restored. Your saved library was left unchanged.';
       if (!restoreCommitted) {
         for (final file in createdFiles) {
@@ -3736,132 +4088,6 @@ class AppState extends ChangeNotifier {
     final fileName = filePath.split(RegExp(r'[/\\]')).last;
     final match = RegExp(r'\.([A-Za-z0-9]{1,10})$').firstMatch(fileName);
     return match == null ? '.bin' : '.${match.group(1)}';
-  }
-
-  Future<void> _loadMediaDownloadConfig() async {
-    final support = await getApplicationSupportDirectory();
-    final file = File(
-      '${support.path}${Platform.pathSeparator}media_downloads.json',
-    );
-    if (!await file.exists()) {
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
-        await rootBundle.loadString('config/media_downloads.json'),
-        flush: true,
-      );
-    }
-    mediaDownloadConfigPath = file.path;
-    MediaDownloadConfig config;
-    try {
-      config = MediaDownloadConfig.decode(await file.readAsString());
-    } on FormatException {
-      // The stored file is not a download links file (for example another
-      // import overwrote it). Keep a copy, then restore the bundled defaults
-      // so the rest of the app keeps working.
-      final backup = File(
-        '${support.path}${Platform.pathSeparator}'
-        'media_downloads.invalid.json',
-      );
-      await file.copy(backup.path);
-      await file.writeAsString(
-        await rootBundle.loadString('config/media_downloads.json'),
-        flush: true,
-      );
-      debugPrint(
-        'Direct media links were reset to the bundled defaults. '
-        'The previous file was kept at ${backup.path}',
-      );
-      config = MediaDownloadConfig.decode(await file.readAsString());
-    }
-    mediaDownloadConfig = config;
-    mediaDownloadErrorMessage = null;
-  }
-
-  Future<void> reloadMediaDownloadConfig() async {
-    try {
-      await _loadMediaDownloadConfig();
-    } on Object catch (error, stackTrace) {
-      debugPrint(
-        'Direct media links could not be reloaded: $error\n$stackTrace',
-      );
-      mediaDownloadConfig = null;
-      mediaDownloadErrorMessage =
-          'The download links file has invalid JSON or an unsupported URL.';
-    }
-    _notify();
-  }
-
-  Future<void> openMediaDownloadConfig() async {
-    final path = mediaDownloadConfigPath;
-    if (!Platform.isWindows || path == null) {
-      mediaDownloadErrorMessage =
-          'Use Import links on this device to load your edited JSON file.';
-      _notify();
-      return;
-    }
-    try {
-      await Process.start('notepad.exe', [
-        path,
-      ], mode: ProcessStartMode.detached);
-      mediaDownloadErrorMessage = null;
-    } on Object catch (error, stackTrace) {
-      debugPrint(
-        'Download links file could not be opened: $error\n$stackTrace',
-      );
-      mediaDownloadErrorMessage =
-          'The download links file could not be opened.';
-    }
-    _notify();
-  }
-
-  Future<void> importMediaDownloadConfig() async {
-    try {
-      final files = await FilePicker.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['json'],
-      );
-      if (files.isEmpty) return;
-      final contents = await files.first.xFile.readAsString();
-      final config = MediaDownloadConfig.decode(contents);
-      final path = mediaDownloadConfigPath;
-      if (path == null) {
-        throw StateError('The download links file has not been initialized.');
-      }
-      final temporary = File('$path.importing');
-      await temporary.writeAsString(config.encode(), flush: true);
-      await File(path).writeAsBytes(await temporary.readAsBytes(), flush: true);
-      await temporary.delete();
-      mediaDownloadConfig = config;
-      mediaDownloadErrorMessage = null;
-    } on Object catch (error, stackTrace) {
-      debugPrint('Download links could not be imported: $error\n$stackTrace');
-      mediaDownloadErrorMessage = error is FormatException
-          ? error.message
-          : 'The download links file could not be imported.';
-    }
-    _notify();
-  }
-
-  Future<void> exportMediaDownloadConfig() async {
-    final path = mediaDownloadConfigPath;
-    if (path == null) {
-      mediaDownloadErrorMessage = 'The download links file is not available.';
-      _notify();
-      return;
-    }
-    try {
-      final contents = await File(path).readAsString();
-      await FilePicker.saveFile(
-        fileName: 'media_downloads.json',
-        bytes: Uint8List.fromList(utf8.encode(contents)),
-        mimeType: 'application/json',
-      );
-    } on Object catch (error, stackTrace) {
-      debugPrint('Download links could not be exported: $error\n$stackTrace');
-      mediaDownloadErrorMessage =
-          'The download links file could not be exported.';
-    }
-    _notify();
   }
 
   Future<void> _saveBooleanPreference(
@@ -3917,9 +4143,14 @@ class AppState extends ChangeNotifier {
     _isDisposed = true;
     _scheduleWindowsMediaControlsSync();
     _desktopRefreshTimer?.cancel();
+    _catalogRefreshTimer?.cancel();
     _notificationTimer?.cancel();
     _volumePersistTimer?.cancel();
+    _videoProgressTimer?.cancel();
+    unawaited(_saveVideoProgress());
     unawaited(_connectivitySubscription?.cancel());
+    unawaited(_androidQueueIndexSubscription?.cancel());
+    unawaited(_androidPositionDiscontinuitySubscription?.cancel());
     _youtubeDownloadService.dispose();
     _client.close();
     unawaited(player.dispose());

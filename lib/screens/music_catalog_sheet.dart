@@ -3,11 +3,10 @@ import 'dart:math' as math;
 
 import 'package:material_ui/material_ui.dart';
 
-import '../models/media_download.dart';
 import '../models/music_track.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
-import '../widgets/configured_downloads_dialog.dart';
+import '../widgets/search_autocomplete_field.dart';
 
 Future<void> showMusicCatalog(BuildContext context, AppState appState) {
   final height = MediaQuery.sizeOf(context).height;
@@ -124,18 +123,22 @@ class _MusicCatalogSheetState extends State<MusicCatalogSheet> {
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 23),
-            child: TextField(
+            child: SearchAutocompleteField(
               controller: _queryController,
               focusNode: _focusNode,
-              textInputAction: TextInputAction.search,
+              suggestions: [
+                ...AppState.musicSuggestions,
+                ...appState.commonsResults.map((result) => result.title),
+              ],
               onChanged: (_) => setState(() {}),
               onSubmitted: (_) => _search(),
+              onSelected: (_) => _search(),
               decoration: InputDecoration(
                 hintText: 'Try a genre, instrument, or artist',
                 prefixIcon: const Icon(Icons.search_rounded),
                 suffixIcon: IconButton(
                   tooltip: 'Search free music',
-                  onPressed: _search,
+                  onPressed: appState.isSearchingMusic ? null : _search,
                   icon: const Icon(Icons.arrow_forward_rounded),
                 ),
               ),
@@ -196,38 +199,12 @@ class _MusicCatalogSheetState extends State<MusicCatalogSheet> {
               child: _CatalogError(
                 message: appState.commonsSearchError!,
                 onRetry: _search,
-                onBrowseLinks: () => showConfiguredDownloadsDialog(
-                  context,
-                  appState: appState,
-                  category: MediaDownloadCategory.music,
-                  initialQuery: _queryController.text,
-                ),
               ),
             )
           else if (appState.commonsResults.isEmpty)
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _CatalogEmpty(
-                  hasSearched: appState.hasSearchedCommons,
-                  message: appState.commonsEmptyMessage,
-                ),
-                if (appState.hasSearchedCommons)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(23, 0, 23, 12),
-                    child: OutlinedButton.icon(
-                      onPressed: () => showConfiguredDownloadsDialog(
-                        context,
-                        appState: appState,
-                        category: MediaDownloadCategory.music,
-                        initialQuery: _queryController.text,
-                      ),
-                      icon: const Icon(Icons.download_rounded, size: 16),
-                      label: const Text('Download from your links file'),
-                    ),
-                  ),
-              ],
+            _CatalogEmpty(
+              hasSearched: appState.hasSearchedCommons,
+              message: appState.commonsEmptyMessage,
             )
           else
             SizedBox(
@@ -311,7 +288,7 @@ class _CatalogEmpty extends StatelessWidget {
           Icon(
             hasSearched ? Icons.search_off_rounded : Icons.graphic_eq_rounded,
             size: 22,
-            color: MusicoPalette.forest,
+            color: MusicoPalette.forestLight,
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -365,15 +342,10 @@ class _CatalogLoading extends StatelessWidget {
 }
 
 class _CatalogError extends StatelessWidget {
-  const _CatalogError({
-    required this.message,
-    required this.onRetry,
-    required this.onBrowseLinks,
-  });
+  const _CatalogError({required this.message, required this.onRetry});
 
   final String message;
   final VoidCallback onRetry;
-  final VoidCallback onBrowseLinks;
 
   @override
   Widget build(BuildContext context) {
@@ -411,11 +383,6 @@ class _CatalogError extends StatelessWidget {
                   onPressed: onRetry,
                   icon: const Icon(Icons.refresh_rounded, size: 16),
                   label: const Text('Try again'),
-                ),
-                TextButton.icon(
-                  onPressed: onBrowseLinks,
-                  icon: const Icon(Icons.download_rounded, size: 16),
-                  label: const Text('Use my direct links'),
                 ),
               ],
             ),
@@ -456,7 +423,7 @@ class _MusicResultTile extends StatelessWidget {
             child: const Icon(
               Icons.graphic_eq_rounded,
               size: 19,
-              color: MusicoPalette.forest,
+              color: MusicoPalette.forestLight,
             ),
           ),
           const SizedBox(width: 11),

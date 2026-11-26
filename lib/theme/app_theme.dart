@@ -1,27 +1,27 @@
 import 'package:material_ui/material_ui.dart';
 
-/// Muted dark surfaces with violet actions and a restrained playback accent.
 abstract final class MusicoPalette {
-  static const canvas = Color(0xFF0D0E12);
-  static const canvasAlt = Color(0xFF15161C);
-  static const paper = Color(0xFF13141A);
-  static const surface = Color(0xFF1B1C23);
-  static const glass = Color(0x0FFFFFFF);
-  static const glassStrong = Color(0x1AFFFFFF);
-  static const ink = Color(0xFFF1F0F2);
-  static const muted = Color(0xFFB0AEB6);
-  static const softInk = Color(0xFFD4D2D8);
-  static const line = Color(0xFF2B2C33);
-  static const forest = Color(0xFF8978C8);
-  static const forestLight = Color(0xFF61558F);
-  static const olive = Color(0xFFCEE08B);
-  static const moss = Color(0xFF8AB69B);
-  static const terracotta = Color(0xFFC9929D);
-  static const clay = Color(0xFF2E2024);
-  static const sky = Color(0xFF202127);
+  static const canvas = Color(0xFFF3EEE4);
+  static const canvasAlt = Color(0xFFE9E1D4);
+  static const paper = Color(0xFFFBF8F1);
+  static const surface = Color(0xFFEDE5D8);
+  static const glass = Color(0xFFE2D8C8);
+  static const glassStrong = Color(0xFFB9AD9B);
+  static const ink = Color(0xFF29251F);
+  static const muted = Color(0xFF71695E);
+  static const softInk = Color(0xFF4F493F);
+  static const line = Color(0xFFD4CABB);
+  static const forest = Color(0xFF465A4B);
+  static const forestLight = Color(0xFF596C55);
+  static const olive = forestLight;
+  static const moss = Color(0xFF687657);
+  static const terracotta = Color(0xFF98472F);
+  static const clay = Color(0xFFE9DCCB);
+  static const clayLight = Color(0xFFF2DED1);
+  static const sky = Color(0xFFE2E6E7);
   static const white = Color(0xFFFFFFFF);
-  static const success = Color(0xFF8AB69B);
-  static const error = Color(0xFFFF8A80);
+  static const success = Color(0xFF546A43);
+  static const error = Color(0xFF9B3F35);
 }
 
 abstract final class MusicoTheme {
@@ -32,83 +32,110 @@ abstract final class MusicoTheme {
             : SystemMouseCursors.click,
       );
 
-  static ThemeData get dark {
+  static ThemeData get light {
     final scheme =
         ColorScheme.fromSeed(
           seedColor: MusicoPalette.forest,
-          brightness: Brightness.dark,
+          brightness: Brightness.light,
           surface: MusicoPalette.paper,
           primary: MusicoPalette.forest,
           secondary: MusicoPalette.terracotta,
-          tertiary: MusicoPalette.olive,
+          tertiary: MusicoPalette.moss,
           error: MusicoPalette.error,
         ).copyWith(
+          primary: MusicoPalette.forest,
+          onPrimary: MusicoPalette.white,
+          primaryContainer: const Color(0xFFDCE4D8),
+          onPrimaryContainer: MusicoPalette.ink,
+          secondary: MusicoPalette.terracotta,
+          onSecondary: MusicoPalette.white,
+          secondaryContainer: MusicoPalette.clayLight,
+          onSecondaryContainer: const Color(0xFF4F2A1F),
           surface: MusicoPalette.paper,
           onSurface: MusicoPalette.ink,
           outline: MusicoPalette.line,
           surfaceContainerHighest: MusicoPalette.canvasAlt,
           surfaceContainerLow: MusicoPalette.surface,
+          error: MusicoPalette.error,
+          onError: MusicoPalette.white,
         );
 
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
-      brightness: Brightness.dark,
-      scaffoldBackgroundColor: Colors.transparent,
-      canvasColor: Colors.transparent,
-      fontFamily: 'Space Grotesk',
+      brightness: Brightness.light,
+      scaffoldBackgroundColor: MusicoPalette.canvas,
+      canvasColor: MusicoPalette.canvas,
+      fontFamily: 'Manrope',
       textTheme: const TextTheme(
         displayLarge: TextStyle(
           color: MusicoPalette.ink,
-          fontSize: 40,
+          fontSize: 36,
           fontWeight: FontWeight.w700,
-          letterSpacing: -1.2,
-          height: 1.02,
+          letterSpacing: -1,
+          height: 1.08,
         ),
         headlineMedium: TextStyle(
           color: MusicoPalette.ink,
-          fontSize: 28,
+          fontSize: 26,
           fontWeight: FontWeight.w700,
-          letterSpacing: -0.6,
-          height: 1.08,
+          letterSpacing: -0.55,
+          height: 1.15,
         ),
-        bodyLarge: TextStyle(color: MusicoPalette.ink, fontSize: 15),
-        bodyMedium: TextStyle(color: MusicoPalette.ink, fontSize: 14),
-        bodySmall: TextStyle(color: MusicoPalette.muted, fontSize: 12),
+        bodyLarge: TextStyle(
+          color: MusicoPalette.ink,
+          fontSize: 15,
+          height: 1.45,
+        ),
+        bodyMedium: TextStyle(
+          color: MusicoPalette.ink,
+          fontSize: 14,
+          height: 1.4,
+        ),
+        bodySmall: TextStyle(
+          color: MusicoPalette.muted,
+          fontSize: 12,
+          height: 1.4,
+        ),
         titleLarge: TextStyle(
           color: MusicoPalette.ink,
-          fontSize: 24,
+          fontSize: 22,
           fontWeight: FontWeight.w700,
-          letterSpacing: -0.7,
+          letterSpacing: -0.45,
         ),
         titleMedium: TextStyle(
           color: MusicoPalette.ink,
-          fontSize: 17,
+          fontSize: 16,
           fontWeight: FontWeight.w600,
-          letterSpacing: -0.2,
+          letterSpacing: -0.15,
         ),
         titleSmall: TextStyle(
           color: MusicoPalette.ink,
           fontSize: 14,
           fontWeight: FontWeight.w600,
         ),
+        labelLarge: TextStyle(
+          color: MusicoPalette.ink,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
       ),
       iconTheme: const IconThemeData(color: MusicoPalette.softInk, size: 20),
       dialogTheme: DialogThemeData(
-        backgroundColor: const Color(0xFF17112B),
+        backgroundColor: MusicoPalette.paper,
         surfaceTintColor: Colors.transparent,
-        elevation: 24,
+        elevation: 8,
         shape: RoundedRectangleBorder(
-          side: const BorderSide(color: MusicoPalette.glassStrong),
+          side: const BorderSide(color: MusicoPalette.line),
           borderRadius: BorderRadius.circular(14),
         ),
       ),
       popupMenuTheme: PopupMenuThemeData(
-        color: const Color(0xFF1B1433),
+        color: MusicoPalette.paper,
         surfaceTintColor: Colors.transparent,
-        elevation: 12,
+        elevation: 6,
         shape: RoundedRectangleBorder(
-          side: const BorderSide(color: MusicoPalette.glassStrong),
+          side: const BorderSide(color: MusicoPalette.line),
           borderRadius: BorderRadius.circular(10),
         ),
         textStyle: const TextStyle(
@@ -119,21 +146,20 @@ abstract final class MusicoTheme {
       ),
       tooltipTheme: TooltipThemeData(
         decoration: BoxDecoration(
-          color: const Color(0xFF211A3A),
-          border: Border.all(color: MusicoPalette.glassStrong),
-          borderRadius: BorderRadius.circular(8),
+          color: MusicoPalette.surface,
+          borderRadius: BorderRadius.circular(6),
         ),
         textStyle: const TextStyle(color: MusicoPalette.ink, fontSize: 11),
         waitDuration: const Duration(milliseconds: 450),
       ),
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: MusicoPalette.canvasAlt,
-        indicatorColor: MusicoPalette.forest.withValues(alpha: .16),
+        indicatorColor: MusicoPalette.clayLight,
         elevation: 0,
         labelTextStyle: WidgetStateProperty.resolveWith(
           (states) => TextStyle(
             color: states.contains(WidgetState.selected)
-                ? MusicoPalette.white
+                ? MusicoPalette.ink
                 : MusicoPalette.muted,
             fontSize: 11,
             fontWeight: FontWeight.w600,
@@ -142,31 +168,31 @@ abstract final class MusicoTheme {
         iconTheme: WidgetStateProperty.resolveWith(
           (states) => IconThemeData(
             color: states.contains(WidgetState.selected)
-                ? MusicoPalette.forest
+                ? MusicoPalette.terracotta
                 : MusicoPalette.muted,
           ),
         ),
       ),
-      navigationRailTheme: NavigationRailThemeData(
-        backgroundColor: Colors.transparent,
-        indicatorColor: MusicoPalette.forest.withValues(alpha: .16),
-        selectedIconTheme: const IconThemeData(color: MusicoPalette.forest),
-        unselectedIconTheme: const IconThemeData(color: MusicoPalette.muted),
-        selectedLabelTextStyle: const TextStyle(
+      navigationRailTheme: const NavigationRailThemeData(
+        backgroundColor: MusicoPalette.paper,
+        indicatorColor: MusicoPalette.clayLight,
+        selectedIconTheme: IconThemeData(color: MusicoPalette.terracotta),
+        unselectedIconTheme: IconThemeData(color: MusicoPalette.muted),
+        selectedLabelTextStyle: TextStyle(
           color: MusicoPalette.ink,
           fontWeight: FontWeight.w600,
         ),
-        unselectedLabelTextStyle: const TextStyle(color: MusicoPalette.muted),
+        unselectedLabelTextStyle: TextStyle(color: MusicoPalette.muted),
       ),
       dividerTheme: const DividerThemeData(
-        color: MusicoPalette.glass,
+        color: MusicoPalette.line,
         thickness: 1,
         space: 1,
       ),
-      dividerColor: MusicoPalette.glass,
+      dividerColor: MusicoPalette.line,
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: MusicoPalette.glass,
+        fillColor: MusicoPalette.paper,
         isDense: true,
         hintStyle: const TextStyle(
           color: MusicoPalette.muted,
@@ -174,7 +200,7 @@ abstract final class MusicoTheme {
           fontWeight: FontWeight.w500,
         ),
         labelStyle: const TextStyle(color: MusicoPalette.muted, fontSize: 13),
-        floatingLabelStyle: const TextStyle(color: MusicoPalette.softInk),
+        floatingLabelStyle: const TextStyle(color: MusicoPalette.forestLight),
         prefixIconColor: MusicoPalette.muted,
         suffixIconColor: MusicoPalette.muted,
         contentPadding: const EdgeInsets.symmetric(
@@ -182,64 +208,77 @@ abstract final class MusicoTheme {
           vertical: 14,
         ),
         border: OutlineInputBorder(
-          borderSide: const BorderSide(color: MusicoPalette.glassStrong),
+          borderSide: const BorderSide(color: MusicoPalette.line),
           borderRadius: BorderRadius.circular(10),
         ),
         enabledBorder: OutlineInputBorder(
-          borderSide: const BorderSide(color: MusicoPalette.glass),
+          borderSide: const BorderSide(color: MusicoPalette.line),
           borderRadius: BorderRadius.circular(10),
         ),
         focusedBorder: OutlineInputBorder(
-          borderSide: const BorderSide(color: MusicoPalette.forest, width: 1.5),
-          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(
+            color: MusicoPalette.forestLight,
+            width: 1.4,
+          ),
+          borderRadius: BorderRadius.circular(10),
         ),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          minimumSize: const Size(44, 44),
-          padding: const EdgeInsets.symmetric(horizontal: 20),
+          minimumSize: const Size(48, 48),
+          padding: const EdgeInsets.symmetric(horizontal: 18),
           backgroundColor: MusicoPalette.forest,
           foregroundColor: MusicoPalette.white,
           disabledBackgroundColor: MusicoPalette.forest.withValues(alpha: .38),
-          disabledForegroundColor: MusicoPalette.white.withValues(alpha: .7),
+          disabledForegroundColor: MusicoPalette.white.withValues(alpha: .85),
           elevation: 0,
-          textStyle: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-            letterSpacing: .1,
-          ),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
         ).copyWith(mouseCursor: _interactiveMouseCursor),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          minimumSize: const Size(44, 44),
-          padding: const EdgeInsets.symmetric(horizontal: 17),
-          foregroundColor: MusicoPalette.ink,
-          backgroundColor: MusicoPalette.glass,
-          side: const BorderSide(color: MusicoPalette.glassStrong),
+          minimumSize: const Size(48, 48),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          foregroundColor: MusicoPalette.terracotta,
+          backgroundColor: MusicoPalette.paper,
+          side: const BorderSide(color: MusicoPalette.line),
           textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
         ).copyWith(mouseCursor: _interactiveMouseCursor),
       ),
       textButtonTheme: TextButtonThemeData(
         style: ButtonStyle(
-          foregroundColor: WidgetStateProperty.all(MusicoPalette.softInk),
+          foregroundColor: WidgetStateProperty.all(MusicoPalette.terracotta),
           mouseCursor: _interactiveMouseCursor,
         ),
       ),
       iconButtonTheme: IconButtonThemeData(
-        style: ButtonStyle(
-          foregroundColor: WidgetStateProperty.all(MusicoPalette.softInk),
-          mouseCursor: _interactiveMouseCursor,
-        ),
+        style: ButtonStyle(mouseCursor: _interactiveMouseCursor),
       ),
-      sliderTheme: const SliderThemeData(
-        activeTrackColor: MusicoPalette.olive,
-        thumbColor: MusicoPalette.olive,
+      sliderTheme: SliderThemeData(
+        activeTrackColor: MusicoPalette.forestLight,
+        thumbColor: MusicoPalette.forestLight,
         inactiveTrackColor: MusicoPalette.glassStrong,
-        overlayColor: Color(0x33CEE08B),
+        overlayColor: MusicoPalette.forest.withValues(alpha: .12),
         trackHeight: 3,
+      ),
+      progressIndicatorTheme: const ProgressIndicatorThemeData(
+        color: MusicoPalette.forestLight,
+        linearTrackColor: MusicoPalette.glassStrong,
+        circularTrackColor: MusicoPalette.glassStrong,
+      ),
+      switchTheme: SwitchThemeData(
+        trackColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? MusicoPalette.forestLight
+              : MusicoPalette.glassStrong,
+        ),
+        thumbColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? MusicoPalette.canvas
+              : MusicoPalette.muted,
+        ),
       ),
       scrollbarTheme: ScrollbarThemeData(
         thumbColor: WidgetStateProperty.all(MusicoPalette.glassStrong),
@@ -254,16 +293,13 @@ abstract final class MusicoTheme {
           color: MusicoPalette.ink,
           fontSize: 12,
         ),
-        shape: RoundedRectangleBorder(
-          side: const BorderSide(color: MusicoPalette.glassStrong),
-          borderRadius: BorderRadius.circular(10),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
       ),
       chipTheme: ChipThemeData(
-        backgroundColor: MusicoPalette.glass,
-        disabledColor: MusicoPalette.glass,
-        selectedColor: MusicoPalette.forest,
-        side: const BorderSide(color: MusicoPalette.glassStrong),
+        backgroundColor: MusicoPalette.canvasAlt,
+        disabledColor: MusicoPalette.canvasAlt,
+        selectedColor: MusicoPalette.clay,
+        side: const BorderSide(color: MusicoPalette.line),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         labelStyle: const TextStyle(
           color: MusicoPalette.softInk,
@@ -271,7 +307,7 @@ abstract final class MusicoTheme {
           fontWeight: FontWeight.w500,
         ),
         secondaryLabelStyle: const TextStyle(
-          color: MusicoPalette.white,
+          color: MusicoPalette.ink,
           fontSize: 12,
           fontWeight: FontWeight.w600,
         ),
@@ -282,15 +318,15 @@ abstract final class MusicoTheme {
           backgroundColor: WidgetStateProperty.resolveWith(
             (states) => states.contains(WidgetState.selected)
                 ? MusicoPalette.forest
-                : Colors.transparent,
+                : MusicoPalette.paper,
           ),
           foregroundColor: WidgetStateProperty.resolveWith(
             (states) => states.contains(WidgetState.selected)
                 ? MusicoPalette.white
-                : MusicoPalette.muted,
+                : MusicoPalette.softInk,
           ),
           side: WidgetStateProperty.all(
-            const BorderSide(color: MusicoPalette.glassStrong),
+            const BorderSide(color: MusicoPalette.line),
           ),
         ),
       ),
@@ -299,9 +335,14 @@ abstract final class MusicoTheme {
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         shape: RoundedRectangleBorder(
-          side: const BorderSide(color: MusicoPalette.glass),
-          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: MusicoPalette.line),
+          borderRadius: BorderRadius.circular(11),
         ),
+      ),
+      textSelectionTheme: TextSelectionThemeData(
+        cursorColor: MusicoPalette.forestLight,
+        selectionColor: MusicoPalette.forestLight.withValues(alpha: .20),
+        selectionHandleColor: MusicoPalette.forestLight,
       ),
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {

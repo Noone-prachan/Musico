@@ -3,9 +3,7 @@ import 'dart:io';
 
 import 'package:just_audio/just_audio.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:media_kit_video/media_kit_video.dart';
 
-import '../models/media_download.dart';
 import '../models/music_playlist.dart';
 import '../models/music_track.dart';
 import '../models/video_track.dart';
@@ -13,72 +11,81 @@ import '../services/synced_lyrics_parser.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/musico_widgets.dart';
-import '../widgets/configured_downloads_dialog.dart';
+import '../widgets/local_video_player.dart';
+import '../widgets/search_autocomplete_field.dart';
 import '../widgets/spotify_playlist_section.dart';
 import '../widgets/youtube_download_dialog.dart';
 
 class MusicScreen extends StatefulWidget {
   const MusicScreen({
     required this.appState,
-    required this.onOpenCatalog,
+    this.favoritesOnly = false,
     super.key,
   });
 
   final AppState appState;
-  final VoidCallback onOpenCatalog;
+  final bool favoritesOnly;
 
   @override
   State<MusicScreen> createState() => _MusicScreenState();
 }
 
+enum _MusicWorkspace { tracks, videos }
+
 class _MusicScreenState extends State<MusicScreen> {
-  bool _showLibrary = false;
+  _MusicWorkspace _workspace = _MusicWorkspace.tracks;
 
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width > 1050;
+    final workspace = switch (_workspace) {
+      _MusicWorkspace.tracks => _LibraryContent(
+        key: const ValueKey('tracks'),
+        appState: widget.appState,
+        favoritesOnly: widget.favoritesOnly,
+      ),
+      _MusicWorkspace.videos => ListView(
+        key: const ValueKey('videos'),
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+        children: [_VideoLibrary(appState: widget.appState)],
+      ),
+    };
     return Column(
       children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(wide ? 34 : 20, 20, wide ? 34 : 20, 0),
-          child: _Header(appState: widget.appState),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: SegmentedButton<bool>(
-              showSelectedIcon: false,
-              segments: const [
-                ButtonSegment(value: false, label: Text('Discover')),
-                ButtonSegment(value: true, label: Text('Library')),
-              ],
-              selected: {_showLibrary},
-              onSelectionChanged: (selected) {
-                setState(() => _showLibrary = selected.single);
-              },
+        Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1180),
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                wide ? 34 : 20,
+                20,
+                wide ? 34 : 20,
+                0,
+              ),
+              child: _Header(
+                appState: widget.appState,
+                favoritesOnly: widget.favoritesOnly,
+              ),
             ),
           ),
         ),
+        if (!widget.favoritesOnly)
+          _MusicWorkspaceTabs(
+            selected: _workspace,
+            onSelected: (workspace) => setState(() => _workspace = workspace),
+          ),
         Expanded(
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 1180),
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 170),
-                switchInCurve: Curves.easeOutCubic,
-                child: _showLibrary
-                    ? _LibraryContent(
-                        key: const ValueKey('library'),
-                        appState: widget.appState,
-                      )
-                    : _DiscoverContent(
-                        key: const ValueKey('discover'),
-                        appState: widget.appState,
-                        onOpenLibrary: () =>
-                            setState(() => _showLibrary = true),
-                        onOpenCatalog: widget.onOpenCatalog,
-                      ),
+              child: Padding(
+                padding: const EdgeInsets.only(top: 14),
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 190),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  child: workspace,
+                ),
               ),
             ),
           ),
@@ -88,377 +95,235 @@ class _MusicScreenState extends State<MusicScreen> {
   }
 }
 
-class _DiscoverContent extends StatelessWidget {
-  const _DiscoverContent({
+class MusicPlaylistsScreen extends StatelessWidget {
+  const MusicPlaylistsScreen({
     required this.appState,
-    required this.onOpenLibrary,
-    required this.onOpenCatalog,
+    required this.onOpenPlaylist,
     super.key,
   });
 
   final AppState appState;
-  final VoidCallback onOpenLibrary;
-  final VoidCallback onOpenCatalog;
+  final VoidCallback onOpenPlaylist;
 
   @override
   Widget build(BuildContext context) {
-    final featuredTrack =
-        appState.currentTrack ??
-        appState.visibleTracks.firstOrNull ??
-        appState.tracks.firstOrNull;
-    final recentTracks = appState.tracks.toList()
-      ..sort((a, b) => b.addedAtMs.compareTo(a.addedAtMs));
-
-    return ListView(
-      key: const PageStorageKey('music-discover'),
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+    return Column(
       children: [
-        _DiscoveryHero(
-          appState: appState,
-          track: featuredTrack,
-          onOpenCatalog: onOpenCatalog,
-        ),
-        const SizedBox(height: 26),
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Playlists',
-                style: Theme.of(context).textTheme.titleLarge,
+        Expanded(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1180),
+              child: _PlaylistsContent(
+                appState: appState,
+                onOpenPlaylist: onOpenPlaylist,
               ),
             ),
-            TextButton(
-              onPressed: onOpenLibrary,
-              child: const Text('Your library'),
-            ),
-          ],
-        ),
-        if (appState.musicPlaylists.isEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 7),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.queue_music_rounded,
-                  size: 19,
-                  color: MusicoPalette.muted,
-                ),
-                const SizedBox(width: 9),
-                Expanded(
-                  child: Text(
-                    appState.tracks.isEmpty
-                        ? 'Create playlists from tracks in your library.'
-                        : 'Group your tracks into playlists from the Library tab.',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ),
-                if (appState.tracks.isNotEmpty)
-                  TextButton(
-                    onPressed: onOpenLibrary,
-                    child: const Text('Create'),
-                  ),
-              ],
-            ),
-          )
-        else
-          SizedBox(
-            height: 205,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: appState.musicPlaylists.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 14),
-              itemBuilder: (context, index) {
-                final playlist = appState.musicPlaylists[index];
-                final playlistTracks = playlist.trackIds
-                    .map(
-                      (id) => appState.tracks
-                          .where((track) => track.id == id)
-                          .firstOrNull,
-                    )
-                    .whereType<MusicTrack>()
-                    .toList();
-                return _PlaylistCard(
-                  playlist: playlist,
-                  artwork: playlistTracks.firstOrNull,
-                  onTap: () {
-                    unawaited(appState.selectMusicPlaylist(playlist.id));
-                    onOpenLibrary();
-                  },
-                );
-              },
-            ),
           ),
-        const SizedBox(height: 26),
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Recently added',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-            ),
-            TextButton(onPressed: onOpenLibrary, child: const Text('See all')),
-          ],
-        ),
-        if (recentTracks.isEmpty)
-          _EmptyCollection(appState: appState)
-        else
-          Container(
-            margin: const EdgeInsets.only(top: 8),
-            decoration: _surfaceDecoration(),
-            child: Column(
-              children: [
-                for (
-                  var index = 0;
-                  index < recentTracks.length && index < 5;
-                  index++
-                ) ...[
-                  _TrackRow(track: recentTracks[index], appState: appState),
-                  if (index < recentTracks.length - 1 && index < 4)
-                    const Divider(height: 1, indent: 64, endIndent: 14),
-                ],
-              ],
-            ),
-          ),
-        if (appState.currentTrack != null) ...[
-          const SizedBox(height: 24),
-          _LyricsPanel(appState: appState),
-        ],
-        const SizedBox(height: 26),
-        OutlinedButton.icon(
-          onPressed: onOpenCatalog,
-          icon: const Icon(Icons.library_music_outlined),
-          label: const Text('Find free music'),
         ),
       ],
     );
   }
 }
 
-class _DiscoveryHero extends StatelessWidget {
-  const _DiscoveryHero({
-    required this.appState,
-    required this.track,
-    required this.onOpenCatalog,
-  });
+class _MusicWorkspaceTabs extends StatelessWidget {
+  const _MusicWorkspaceTabs({required this.selected, required this.onSelected});
 
-  final AppState appState;
-  final MusicTrack? track;
-  final VoidCallback onOpenCatalog;
+  final _MusicWorkspace selected;
+  final ValueChanged<_MusicWorkspace> onSelected;
 
   @override
   Widget build(BuildContext context) {
-    final selectedTrack = track;
-    return Container(
-      padding: const EdgeInsets.all(22),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF3D2F73), Color(0xFF241D42), Color(0xFF171326)],
-        ),
-        border: Border.all(color: MusicoPalette.glassStrong),
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(
-            color: MusicoPalette.forest.withValues(alpha: .30),
-            blurRadius: 46,
-            offset: const Offset(0, 18),
-            spreadRadius: -8,
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1180),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.fromLTRB(20, 13, 20, 0),
+          child: Row(
+            children: [
+              for (final section in const [
+                _MusicWorkspace.tracks,
+                _MusicWorkspace.videos,
+              ]) ...[
+                if (section != _MusicWorkspace.values.first)
+                  const SizedBox(width: 8),
+                _MusicWorkspaceTab(
+                  label: switch (section) {
+                    _MusicWorkspace.tracks => 'Tracks',
+                    _MusicWorkspace.videos => 'Videos',
+                  },
+                  selected: selected == section,
+                  onTap: () => onSelected(section),
+                ),
+              ],
+            ],
           ),
-        ],
+        ),
       ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          if (selectedTrack == null) {
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text.rich(
-                  TextSpan(
-                    children: [
-                      const TextSpan(text: 'Your music, ready\n'),
-                      TextSpan(
-                        text: 'offline.',
-                        style: TextStyle(
-                          color: MusicoPalette.olive,
-                          shadows: [
-                            Shadow(
-                              color: MusicoPalette.olive.withValues(alpha: .35),
-                              blurRadius: 24,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  style: Theme.of(context).textTheme.headlineMedium,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Import audio from this device or browse openly licensed music.',
-                  style: Theme.of(context).textTheme.bodyMedium
-                      ?.copyWith(color: MusicoPalette.muted, height: 1.5),
-                ),
-                const SizedBox(height: 18),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 8,
-                  children: [
-                    FilledButton.icon(
-                      onPressed: appState.pickAudioFiles,
-                      icon: const Icon(Icons.add_rounded),
-                      label: const Text('Import audio'),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: onOpenCatalog,
-                      icon: const Icon(Icons.search_rounded),
-                      label: const Text('Find free music'),
-                    ),
-                  ],
-                ),
-              ],
-            );
-          }
+    );
+  }
+}
 
-          final metadata = selectedTrack.displayMetadata;
-          final compact = constraints.maxWidth < 450;
-          final artwork = Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: [
-                BoxShadow(
-                  color: MusicoPalette.forest.withValues(alpha: .45),
-                  blurRadius: 40,
-                  spreadRadius: 2,
-                ),
-              ],
-            ),
-            child: _PlayerArtwork(
-              track: selectedTrack,
-              size: compact ? 104 : 168,
-            ),
-          );
-          final actions = Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                appState.currentTrack?.id == selectedTrack.id
-                    ? 'NOW PLAYING'
-                    : 'FROM YOUR LIBRARY',
-                style: const TextStyle(
-                  color: MusicoPalette.olive,
-                  fontFamily: 'IBM Plex Mono',
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: .7,
-                ),
-              ),
-              const SizedBox(height: 9),
-              Text(
-                metadata.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 4),
-              Text(
-                metadata.artist,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodyMedium
-                    ?.copyWith(color: MusicoPalette.muted),
-              ),
-              const SizedBox(height: 14),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: MusicoPalette.olive,
-                  foregroundColor: MusicoPalette.canvas,
-                  minimumSize: const Size(0, 42),
-                  shape: const StadiumBorder(),
-                ),
-                onPressed: () {
-                  if (appState.currentTrack?.id == selectedTrack.id) {
-                    appState.togglePlayback();
-                  } else {
-                    appState.playTrack(selectedTrack);
-                  }
-                },
-                icon: Icon(
-                  appState.currentTrack?.id == selectedTrack.id &&
-                          appState.isPlaying
-                      ? Icons.pause_rounded
-                      : Icons.play_arrow_rounded,
-                ),
-                label: Text(
-                  appState.currentTrack?.id == selectedTrack.id &&
-                          appState.isPlaying
-                      ? 'Pause'
-                      : 'Play',
-                ),
-              ),
-            ],
-          );
+class _MusicWorkspaceTab extends StatelessWidget {
+  const _MusicWorkspaceTab({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
 
-          if (compact) {
-            return Row(
-              children: [
-                artwork,
-                const SizedBox(width: 15),
-                Expanded(child: actions),
-              ],
-            );
-          }
-          return Row(
-            children: [
-              Expanded(child: actions),
-              const SizedBox(width: 24),
-              artwork,
-            ],
-          );
-        },
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      showCheckmark: false,
+      onSelected: (_) => onTap(),
+      backgroundColor: MusicoPalette.canvasAlt,
+      selectedColor: MusicoPalette.forest,
+      side: BorderSide(
+        color: selected ? MusicoPalette.forest : MusicoPalette.line,
       ),
+      labelStyle: TextStyle(
+        color: selected ? MusicoPalette.white : MusicoPalette.softInk,
+        fontSize: 12,
+        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+      ),
+      shape: const StadiumBorder(),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      mouseCursor: SystemMouseCursors.click,
+      elevation: 0,
+      pressElevation: 0,
+      shadowColor: Colors.transparent,
+      selectedShadowColor: Colors.transparent,
     );
   }
 }
 
 class _PlaylistCard extends StatelessWidget {
   const _PlaylistCard({
+    required this.appState,
     required this.playlist,
-    required this.artwork,
-    required this.onTap,
+    required this.onOpenPlaylist,
   });
 
+  final AppState appState;
   final MusicPlaylist playlist;
-  final MusicTrack? artwork;
-  final VoidCallback onTap;
+  final VoidCallback onOpenPlaylist;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: 144,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(12),
+    final playlistTracks = appState.tracks
+        .where((track) => playlist.trackIds.contains(track.id))
+        .toList();
+    final selected = playlist.id == appState.selectedMusicPlaylistId;
+    final name = playlist.name;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () async {
+          if (await appState.selectMusicPlaylist(playlist.id)) {
+            onOpenPlaylist();
+          }
+        },
+        child: Ink(
+          decoration: BoxDecoration(
+            color: MusicoPalette.canvasAlt,
+            border: Border.all(
+              color: selected ? MusicoPalette.forestLight : MusicoPalette.line,
+              width: selected ? 1.5 : 1,
+            ),
+            borderRadius: BorderRadius.circular(16),
+          ),
           child: Padding(
-            padding: const EdgeInsets.all(3),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(
               children: [
-                _PlayerArtwork(track: artwork, size: 136),
-                const SizedBox(height: 8),
-                Text(
-                  playlist.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleSmall,
+                _PlayerArtwork(track: playlistTracks.firstOrNull, size: 72),
+                const SizedBox(width: 13),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'PLAYLIST',
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: MusicoPalette.olive,
+                          letterSpacing: 1.2,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${playlistTracks.length} ${playlistTracks.length == 1 ? 'track' : 'tracks'}',
+                        style: Theme.of(context).textTheme.bodySmall
+                            ?.copyWith(color: MusicoPalette.muted),
+                      ),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  '${playlist.trackIds.length} ${playlist.trackIds.length == 1 ? 'track' : 'tracks'}',
-                  style: Theme.of(context).textTheme.bodySmall,
+                IconButton.filled(
+                  tooltip: playlistTracks.isEmpty
+                      ? 'Playlist is empty'
+                      : 'Play $name',
+                  onPressed: playlistTracks.isEmpty
+                      ? null
+                      : () async {
+                          await appState.selectMusicPlaylist(playlist.id);
+                          await appState.playTrack(playlistTracks.first);
+                        },
+                  icon: const Icon(Icons.play_arrow_rounded),
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size(48, 48),
+                    maximumSize: const Size(48, 48),
+                    padding: EdgeInsets.zero,
+                  ),
+                ),
+                PopupMenuButton<String>(
+                  tooltip: 'Manage $name',
+                  onSelected: (action) {
+                    if (action == 'rename') {
+                      _showRenamePlaylistDialog(context, appState, playlist);
+                    } else if (action == 'delete') {
+                      _confirmDeletePlaylist(context, appState, playlist);
+                    }
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(
+                      value: 'rename',
+                      child: Row(
+                        children: [
+                          Icon(Icons.edit_outlined),
+                          SizedBox(width: 12),
+                          Text('Rename playlist'),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: Row(
+                        children: [
+                          Icon(Icons.delete_outline_rounded),
+                          SizedBox(width: 12),
+                          Text('Delete playlist'),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -470,9 +335,14 @@ class _PlaylistCard extends StatelessWidget {
 }
 
 class _LibraryContent extends StatelessWidget {
-  const _LibraryContent({required this.appState, super.key});
+  const _LibraryContent({
+    required this.appState,
+    this.favoritesOnly = false,
+    super.key,
+  });
 
   final AppState appState;
+  final bool favoritesOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -480,24 +350,116 @@ class _LibraryContent extends StatelessWidget {
       key: const PageStorageKey('music-library'),
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
       children: [
-        _MusicLibrary(appState: appState),
+        _MusicLibrary(appState: appState, favoritesOnly: favoritesOnly),
         if (appState.currentTrack != null) ...[
           const SizedBox(height: 22),
           _LyricsPanel(appState: appState),
         ],
-        const SizedBox(height: 28),
+      ],
+    );
+  }
+}
+
+class _PlaylistsContent extends StatelessWidget {
+  const _PlaylistsContent({
+    required this.appState,
+    required this.onOpenPlaylist,
+  });
+
+  final AppState appState;
+  final VoidCallback onOpenPlaylist;
+
+  @override
+  Widget build(BuildContext context) {
+    final playlists = appState.musicPlaylists;
+    return ListView(
+      key: const PageStorageKey('music-playlists'),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+      children: [
+        SectionHeading(
+          title: 'Playlists',
+          detail:
+              '${playlists.length} ${playlists.length == 1 ? 'playlist' : 'playlists'}',
+          trailing: FilledButton.tonalIcon(
+            onPressed: () => _showCreatePlaylistDialog(context, appState),
+            icon: const Icon(Icons.add_outlined, size: 18),
+            label: const Text('New playlist'),
+          ),
+        ),
+        const SizedBox(height: 10),
+        if (playlists.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(18),
+            decoration: _surfaceDecoration(),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.queue_music_outlined,
+                  color: MusicoPalette.forestLight,
+                  size: 23,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'No playlists yet',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontSize: 14),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Create a playlist to organize the songs you love.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          LayoutBuilder(
+            builder: (context, constraints) {
+              const spacing = 12.0;
+              final columns = ((constraints.maxWidth + spacing) / 292)
+                  .floor()
+                  .clamp(1, 3)
+                  .toInt();
+              final cardWidth =
+                  (constraints.maxWidth - spacing * (columns - 1)) / columns;
+              return Wrap(
+                spacing: spacing,
+                runSpacing: spacing,
+                children: [
+                  for (final playlist in playlists)
+                    SizedBox(
+                      width: cardWidth,
+                      height: 148,
+                      child: _PlaylistCard(
+                        appState: appState,
+                        playlist: playlist,
+                        onOpenPlaylist: onOpenPlaylist,
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+        const SizedBox(height: 34),
         SpotifyPlaylistSection(appState: appState),
-        const SizedBox(height: 28),
-        _VideoLibrary(appState: appState),
       ],
     );
   }
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.appState});
+  const _Header({required this.appState, this.favoritesOnly = false});
 
   final AppState appState;
+  final bool favoritesOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -508,36 +470,16 @@ class _Header extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'MUSICO · OFFLINE FIRST',
-              style: TextStyle(
-                color: MusicoPalette.olive.withValues(alpha: .85),
-                fontFamily: 'IBM Plex Mono',
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 1.8,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text.rich(
-              TextSpan(
-                children: [
-                  const TextSpan(text: 'Your music,\n'),
-                  TextSpan(
-                    text: 'always yours.',
-                    style: TextStyle(
-                      color: MusicoPalette.olive,
-                      shadows: [
-                        Shadow(
-                          color: MusicoPalette.olive.withValues(alpha: .45),
-                          blurRadius: 26,
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+              favoritesOnly ? 'Favorites' : 'Songs',
               style: Theme.of(context).textTheme.displayLarge
-                  ?.copyWith(fontSize: compact ? 29 : 38),
+                  ?.copyWith(fontSize: compact ? 28 : 34),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              favoritesOnly
+                  ? 'Tracks you have saved with a heart.'
+                  : 'Your music, kept on this device.',
+              style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
         );
@@ -546,33 +488,36 @@ class _Header extends StatelessWidget {
           children: [
             Expanded(child: title),
             const SizedBox(width: 14),
-            if (compact)
-              IconButton.filledTonal(
-                tooltip: 'Download from YouTube',
-                onPressed: () =>
-                    showYouTubeDownloadDialog(context, appState: appState),
-                icon: const Icon(Icons.download_rounded),
-              )
-            else
-              OutlinedButton.icon(
-                onPressed: () =>
-                    showYouTubeDownloadDialog(context, appState: appState),
-                icon: const Icon(Icons.download_rounded, size: 17),
-                label: const Text('Download'),
-              ),
-            const SizedBox(width: 8),
-            if (compact)
-              IconButton.filledTonal(
+            if (compact) ...[
+              IconButton.filled(
                 tooltip: 'Import audio',
                 onPressed: appState.pickAudioFiles,
-                icon: const Icon(Icons.add_rounded),
-              )
-            else
+                color: Theme.of(context).colorScheme.onPrimary,
+                icon: const Icon(Icons.add_outlined),
+              ),
+              const SizedBox(width: 4),
+              IconButton.filledTonal(
+                tooltip: 'Download from YouTube',
+                onPressed: () => unawaited(
+                  showYouTubeDownloadDialog(context, appState: appState),
+                ),
+                icon: const Icon(Icons.download_outlined),
+              ),
+            ] else ...[
               FilledButton.icon(
                 onPressed: appState.pickAudioFiles,
-                icon: const Icon(Icons.add_rounded, size: 18),
+                icon: const Icon(Icons.add_outlined, size: 18),
                 label: const Text('Import audio'),
               ),
+              const SizedBox(width: 8),
+              FilledButton.tonalIcon(
+                onPressed: () => unawaited(
+                  showYouTubeDownloadDialog(context, appState: appState),
+                ),
+                icon: const Icon(Icons.download_outlined, size: 18),
+                label: const Text('Download'),
+              ),
+            ],
           ],
         );
       },
@@ -581,21 +526,75 @@ class _Header extends StatelessWidget {
 }
 
 class _MusicLibrary extends StatelessWidget {
-  const _MusicLibrary({required this.appState});
+  const _MusicLibrary({required this.appState, this.favoritesOnly = false});
 
   final AppState appState;
+  final bool favoritesOnly;
 
   @override
   Widget build(BuildContext context) {
-    final tracks = appState.visibleTracks;
+    final tracks = favoritesOnly
+        ? appState.visibleFavoriteTracks
+        : appState.visibleTracks;
     final allEmpty = appState.tracks.isEmpty;
+    final selectedPlaylist = favoritesOnly
+        ? null
+        : appState.musicPlaylists
+              .where(
+                (playlist) => playlist.id == appState.selectedMusicPlaylistId,
+              )
+              .firstOrNull;
+    final emptyMessage = favoritesOnly
+        ? appState.trackQuery.isEmpty
+              ? 'No favorite tracks yet.'
+              : 'No favorite tracks match that search.'
+        : selectedPlaylist != null
+        ? appState.trackQuery.isEmpty
+              ? 'This playlist has no songs yet.'
+              : 'No songs match that search in this playlist.'
+        : 'No songs match that search.';
+    final suggestionTracks = appState.tracks.where((track) {
+      if (favoritesOnly) {
+        return appState.favoriteTrackIds.contains(track.id);
+      }
+      if (selectedPlaylist != null) {
+        return selectedPlaylist.trackIds.contains(track.id);
+      }
+      return true;
+    }).toList();
+    final searchField = SearchAutocompleteField(
+      initialText: appState.trackQuery,
+      suggestions: [
+        for (final track in suggestionTracks) ...[
+          track.displayMetadata.title,
+          track.displayMetadata.artist,
+        ],
+      ],
+      onChanged: appState.setTrackQuery,
+      decoration: InputDecoration(
+        hintText: favoritesOnly ? 'Search favorites' : 'Search songs',
+        prefixIcon: const Icon(Icons.search_outlined, size: 17),
+      ),
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         SectionHeading(
-          title: 'Library',
-          detail:
-              '${appState.tracks.length} ${appState.tracks.length == 1 ? 'track' : 'tracks'}',
+          title: favoritesOnly
+              ? 'Favorite tracks'
+              : selectedPlaylist?.name ?? 'All songs',
+          detail: favoritesOnly
+              ? '${appState.favoriteTrackIds.length} ${appState.favoriteTrackIds.length == 1 ? 'track' : 'tracks'}'
+              : '${tracks.length} ${tracks.length == 1 ? 'track' : 'tracks'}',
+          trailing: selectedPlaylist == null
+              ? null
+              : TextButton.icon(
+                  onPressed: () async {
+                    await appState.selectMusicPlaylist(null);
+                  },
+                  icon: const Icon(Icons.close_outlined, size: 16),
+                  label: const Text('All songs'),
+                ),
         ),
         if (appState.musicErrorMessage != null) ...[
           const SizedBox(height: 10),
@@ -605,136 +604,51 @@ class _MusicLibrary extends StatelessWidget {
                 ?.copyWith(color: MusicoPalette.error),
           ),
         ],
-        const SizedBox(height: 13),
-        _PlaylistSelector(appState: appState),
         const SizedBox(height: 10),
-        TextField(
-          textInputAction: TextInputAction.search,
-          onChanged: appState.setTrackQuery,
-          decoration: InputDecoration(
-            hintText: 'Search your library',
-            prefixIcon: const Icon(Icons.search_rounded, size: 17),
-            suffixIcon: appState.trackQuery.isEmpty
-                ? null
-                : IconButton(
-                    tooltip: 'Clear music search',
-                    onPressed: () => appState.setTrackQuery(''),
-                    icon: const Icon(Icons.close_rounded, size: 16),
-                  ),
-          ),
-        ),
+        searchField,
         const SizedBox(height: 11),
         if (allEmpty)
           _EmptyCollection(appState: appState)
+        else if (tracks.isEmpty &&
+            favoritesOnly &&
+            appState.favoriteTrackIds.isEmpty &&
+            appState.trackQuery.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(22),
+            decoration: _surfaceDecoration(),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.favorite_border_rounded,
+                  color: MusicoPalette.terracotta,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Tap the heart on any track to keep it here.',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ),
+              ],
+            ),
+          )
         else if (tracks.isEmpty)
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(25),
             decoration: _surfaceDecoration(),
             child: Text(
-              appState.selectedMusicPlaylistId == null
-                  ? 'No tracks match that search.'
-                  : 'This playlist is empty. Choose All music to see your tracks.',
+              emptyMessage,
               style: Theme.of(context).textTheme.bodySmall,
             ),
           )
-        else
-          Container(
-            decoration: _surfaceDecoration(),
-            child: Column(
-              children: [
-                for (var index = 0; index < tracks.length; index++) ...[
-                  _TrackRow(track: tracks[index], appState: appState),
-                  if (index != tracks.length - 1)
-                    const Divider(height: 1, indent: 64, endIndent: 14),
-                ],
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-class _PlaylistSelector extends StatelessWidget {
-  const _PlaylistSelector({required this.appState});
-
-  final AppState appState;
-
-  @override
-  Widget build(BuildContext context) {
-    final selectedPlaylist = appState.musicPlaylists
-        .where((playlist) => playlist.id == appState.selectedMusicPlaylistId)
-        .firstOrNull;
-    return Row(
-      children: [
-        Expanded(
-          child: DropdownButtonFormField<String?>(
-            initialValue: appState.selectedMusicPlaylistId,
-            isExpanded: true,
-            decoration: const InputDecoration(
-              labelText: 'Playlist',
-              prefixIcon: Icon(Icons.queue_music_rounded, size: 18),
-              contentPadding: EdgeInsets.symmetric(
-                horizontal: 12,
-                vertical: 10,
-              ),
-            ),
-            items: [
-              const DropdownMenuItem<String?>(
-                value: null,
-                child: Text('All music'),
-              ),
-              for (final playlist in appState.musicPlaylists)
-                DropdownMenuItem<String?>(
-                  value: playlist.id,
-                  child: Text(
-                    '${playlist.name} · ${playlist.trackIds.length}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-            ],
-            onChanged: (id) {
-              if (id != appState.selectedMusicPlaylistId) {
-                unawaited(appState.selectMusicPlaylist(id));
-              }
-            },
-          ),
-        ),
-        const SizedBox(width: 8),
-        IconButton.filledTonal(
-          tooltip: 'Create playlist',
-          onPressed: () => _showCreatePlaylistDialog(context, appState),
-          icon: const Icon(Icons.playlist_add_rounded),
-        ),
-        if (selectedPlaylist != null)
-          PopupMenuButton<String>(
-            tooltip: 'Manage ${selectedPlaylist.name}',
-            onSelected: (action) {
-              if (action == 'rename') {
-                _showRenamePlaylistDialog(context, appState, selectedPlaylist);
-              } else if (action == 'delete') {
-                _confirmDeletePlaylist(context, appState, selectedPlaylist);
-              }
-            },
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: 'rename',
-                child: ListTile(
-                  leading: Icon(Icons.edit_outlined),
-                  title: Text('Rename playlist'),
-                ),
-              ),
-              PopupMenuItem(
-                value: 'delete',
-                child: ListTile(
-                  leading: Icon(Icons.delete_outline_rounded),
-                  title: Text('Delete playlist'),
-                ),
-              ),
-            ],
-          ),
+        else ...[
+          for (var index = 0; index < tracks.length; index++) ...[
+            if (index > 0) const SizedBox(height: 8),
+            _TrackRow(track: tracks[index], appState: appState),
+          ],
+        ],
       ],
     );
   }
@@ -772,7 +686,7 @@ class _EmptyCollection extends StatelessWidget {
                 ),
                 child: const Icon(
                   Icons.library_music_outlined,
-                  color: MusicoPalette.forest,
+                  color: MusicoPalette.forestLight,
                   size: 18,
                 ),
               ),
@@ -788,7 +702,7 @@ class _EmptyCollection extends StatelessWidget {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Import audio from your device or find free music.',
+                      'Import audio from your device or use Download to add music.',
                       style: Theme.of(context).textTheme.bodySmall
                           ?.copyWith(height: 1.5),
                     ),
@@ -894,39 +808,7 @@ class _LyricsPanel extends StatelessWidget {
             Align(
               alignment: Alignment.centerRight,
               child: TextButton(
-                onPressed: () => showModalBottomSheet<void>(
-                  context: context,
-                  isScrollControlled: true,
-                  useSafeArea: true,
-                  backgroundColor: MusicoPalette.paper,
-                  showDragHandle: true,
-                  builder: (context) => DraggableScrollableSheet(
-                    expand: false,
-                    initialChildSize: .75,
-                    builder: (context, controller) => ListView(
-                      controller: controller,
-                      padding: const EdgeInsets.fromLTRB(24, 8, 24, 25),
-                      children: [
-                        Text(
-                          'Lyrics',
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                        const SizedBox(height: 14),
-                        if (appState.syncedLyricLines.isEmpty)
-                          SelectableText(
-                            appState.lyrics!,
-                            style: Theme.of(context).textTheme.bodyMedium
-                                ?.copyWith(height: 1.8),
-                          )
-                        else
-                          _SyncedLyricsDocument(
-                            lines: appState.syncedLyricLines,
-                            activeIndex: appState.activeLyricIndex,
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
+                onPressed: () => _showLyricsSheet(context, appState),
                 child: const Text('Read full lyrics'),
               ),
             ),
@@ -982,7 +864,11 @@ class _SyncedLyricsPreview extends StatelessWidget {
 }
 
 class _SyncedLyricsDocument extends StatefulWidget {
-  const _SyncedLyricsDocument({required this.lines, required this.activeIndex});
+  const _SyncedLyricsDocument({
+    required this.lines,
+    required this.activeIndex,
+    super.key,
+  });
 
   final List<SyncedLyricLine> lines;
   final int activeIndex;
@@ -1025,7 +911,7 @@ class _SyncedLyricsDocumentState extends State<_SyncedLyricsDocument> {
       unawaited(
         Scrollable.ensureVisible(
           targetContext,
-          alignment: .45,
+          alignment: .5,
           duration: MediaQuery.disableAnimationsOf(targetContext)
               ? Duration.zero
               : const Duration(milliseconds: 220),
@@ -1038,26 +924,45 @@ class _SyncedLyricsDocumentState extends State<_SyncedLyricsDocument> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
     return SelectionArea(
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           for (var index = 0; index < widget.lines.length; index++)
             Padding(
               key: _lineKeys[index],
-              padding: const EdgeInsets.symmetric(vertical: 3),
-              child: AnimatedDefaultTextStyle(
-                duration: const Duration(milliseconds: 150),
-                style: theme.textTheme.bodyMedium!.copyWith(
-                  color: index == widget.activeIndex
-                      ? MusicoPalette.olive
-                      : MusicoPalette.softInk,
-                  fontWeight: index == widget.activeIndex
-                      ? FontWeight.w700
-                      : FontWeight.normal,
-                  height: 1.8,
+              padding: const EdgeInsets.symmetric(vertical: 9),
+              child: AnimatedOpacity(
+                duration: reduceMotion
+                    ? Duration.zero
+                    : const Duration(milliseconds: 180),
+                opacity: switch ((index - widget.activeIndex).abs()) {
+                  0 => 1,
+                  1 => .88,
+                  2 => .76,
+                  _ => .66,
+                },
+                child: AnimatedDefaultTextStyle(
+                  duration: reduceMotion
+                      ? Duration.zero
+                      : const Duration(milliseconds: 180),
+                  textAlign: TextAlign.center,
+                  style:
+                      (index == widget.activeIndex
+                              ? theme.textTheme.headlineMedium!
+                              : theme.textTheme.titleMedium!)
+                          .copyWith(
+                            color: index == widget.activeIndex
+                                ? MusicoPalette.olive
+                                : MusicoPalette.softInk,
+                            fontWeight: index == widget.activeIndex
+                                ? FontWeight.w700
+                                : FontWeight.w500,
+                            height: 1.45,
+                          ),
+                  child: Text(widget.lines[index].text),
                 ),
-                child: Text(widget.lines[index].text),
               ),
             ),
         ],
@@ -1084,16 +989,6 @@ class _VideoLibrary extends StatelessWidget {
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              IconButton.filledTonal(
-                tooltip: 'Download configured videos',
-                onPressed: () => showConfiguredDownloadsDialog(
-                  context,
-                  appState: appState,
-                  category: MediaDownloadCategory.video,
-                ),
-                icon: const Icon(Icons.download_rounded, size: 18),
-              ),
-              const SizedBox(width: 6),
               FilledButton.tonalIcon(
                 onPressed: appState.isImportingVideos
                     ? null
@@ -1123,33 +1018,37 @@ class _VideoLibrary extends StatelessWidget {
         ],
         const SizedBox(height: 12),
         if (current != null) ...[
-          ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: AspectRatio(
-              aspectRatio: 16 / 9,
-              child: Video(controller: appState.videoController),
-            ),
-          ),
+          LocalVideoPlayer(appState: appState, video: current),
           const SizedBox(height: 9),
           Row(
             children: [
               Expanded(
-                child: Text(
-                  current.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleSmall,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      current.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    if (current.artist case final artist?)
+                      Text(
+                        artist,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                  ],
                 ),
               ),
               IconButton(
                 tooltip: 'Stop video',
                 onPressed: appState.stopVideo,
-                icon: const Icon(Icons.close_rounded, size: 18),
+                icon: const Icon(Icons.close_outlined, size: 18),
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          _LyricsPanel(appState: appState),
         ] else if (appState.videoTracks.isEmpty)
           _VideoEmptyState(appState: appState)
         else
@@ -1185,20 +1084,12 @@ class _VideoRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final duration = video.durationMs > 0
+        ? _formatDuration(Duration(milliseconds: video.durationMs))
+        : 'Length unavailable';
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
-      leading: Container(
-        width: 38,
-        height: 38,
-        decoration: BoxDecoration(
-          color: MusicoPalette.canvasAlt,
-          borderRadius: BorderRadius.circular(11),
-        ),
-        child: const Icon(
-          Icons.play_arrow_rounded,
-          color: MusicoPalette.forest,
-        ),
-      ),
+      leading: LocalVideoArtwork(video: video, size: 46),
       title: Text(
         video.title,
         maxLines: 1,
@@ -1206,7 +1097,11 @@ class _VideoRow extends StatelessWidget {
         style: Theme.of(context).textTheme.titleSmall,
       ),
       subtitle: Text(
-        '${(video.byteSize / (1024 * 1024)).toStringAsFixed(1)} MB · ${video.rights ?? 'available offline'}',
+        [
+          ?video.artist,
+          duration,
+          '${(video.byteSize / (1024 * 1024)).toStringAsFixed(1)} MB',
+        ].join(' · '),
         style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11),
       ),
       trailing: Row(
@@ -1221,7 +1116,7 @@ class _VideoRow extends StatelessWidget {
           IconButton(
             tooltip: 'Remove video from this device',
             onPressed: () => appState.removeVideo(video),
-            icon: const Icon(Icons.close_rounded, size: 17),
+            icon: const Icon(Icons.close_outlined, size: 17),
           ),
         ],
       ),
@@ -1312,133 +1207,369 @@ class _TrackRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final active = appState.currentTrack?.id == track.id;
+    final favorite = appState.favoriteTrackIds.contains(track.id);
     final metadata = track.displayMetadata;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: Row(
-        children: [
-          InkWell(
-            customBorder: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(11),
+    final playbackDurationMs =
+        (track.clipEndMs ?? track.durationMs) - (track.clipStartMs ?? 0);
+    final duration = playbackDurationMs > 0
+        ? _formatDuration(Duration(milliseconds: playbackDurationMs))
+        : 'Length unavailable';
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => unawaited(appState.playTrack(track)),
+        mouseCursor: SystemMouseCursors.click,
+        child: Ink(
+          decoration: BoxDecoration(
+            color: MusicoPalette.canvasAlt,
+            border: Border.all(
+              color: active ? MusicoPalette.forestLight : MusicoPalette.line,
             ),
-            onTap: () => appState.playTrack(track),
-            mouseCursor: SystemMouseCursors.click,
-            child: _TrackArtwork(track: track, appState: appState),
+            borderRadius: BorderRadius.circular(16),
           ),
-          const SizedBox(width: 11),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
               children: [
-                Text(
-                  metadata.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    color: active ? MusicoPalette.forest : MusicoPalette.ink,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  [
-                    track.license == null
-                        ? '${metadata.artist} · on this device'
-                        : '${metadata.artist} · ${track.license}',
-                    if (track.clipStartMs != null || track.clipEndMs != null)
-                      'trimmed',
-                  ].join(' · '),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall
-                      ?.copyWith(fontSize: 11),
-                ),
-              ],
-            ),
-          ),
-          if (track.sourceUrl != null || track.artworkPath != null)
-            IconButton(
-              tooltip: 'View source and rights',
-              visualDensity: VisualDensity.compact,
-              onPressed: () => _showTrackDetails(context, track),
-              icon: const Icon(Icons.info_outline_rounded, size: 16),
-            ),
-          PopupMenuButton<String>(
-            tooltip: 'Track options',
-            onSelected: (action) {
-              switch (action) {
-                case 'rename':
-                  _showRenameTrackDialog(context, appState, track);
-                  break;
-                case 'artwork':
-                  unawaited(_findLicensedArtwork(context, appState, track));
-                  break;
-                case 'playlist':
-                  _showTrackPlaylistsDialog(context, appState, track);
-                  break;
-                case 'trim':
-                  _showTrackTrimDialog(context, appState, track);
-                  break;
-                case 'remove':
-                  _confirmRemoveTrack(context, appState, track);
-                  break;
-              }
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'rename',
-                child: Row(
-                  children: [
-                    Icon(Icons.edit_outlined),
-                    SizedBox(width: 12),
-                    Text('Rename song'),
-                  ],
-                ),
-              ),
-              if (track.artworkPath == null)
-                const PopupMenuItem(
-                  value: 'artwork',
-                  child: Row(
+                _TrackArtwork(track: track, appState: appState, size: 52),
+                const SizedBox(width: 11),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.image_search_outlined),
-                      SizedBox(width: 12),
-                      Text('Find licensed artwork'),
+                      Text(
+                        metadata.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: active
+                              ? MusicoPalette.forestLight
+                              : MusicoPalette.ink,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        '${metadata.artist} · $duration${track.clipStartMs != null || track.clipEndMs != null ? ' · trimmed' : ''}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall
+                            ?.copyWith(fontSize: 11),
+                      ),
+                      if (track.addedAtMs > 0) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          _formatTrackDate(track.addedAtMs),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(fontSize: 10),
+                        ),
+                      ],
                     ],
                   ),
                 ),
-              PopupMenuItem(
-                value: 'playlist',
+                IconButton(
+                  tooltip: favorite
+                      ? 'Remove ${metadata.title} from favorites'
+                      : 'Add ${metadata.title} to favorites',
+                  onPressed: () =>
+                      unawaited(appState.toggleFavoriteTrack(track.id)),
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size(40, 40),
+                    maximumSize: const Size(40, 40),
+                    padding: EdgeInsets.zero,
+                    foregroundColor: favorite
+                        ? MusicoPalette.terracotta
+                        : MusicoPalette.muted,
+                  ),
+                  icon: Icon(
+                    favorite
+                        ? Icons.favorite_rounded
+                        : Icons.favorite_border_rounded,
+                  ),
+                ),
+                _TrackOptionsButton(track: track, appState: appState),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TrackOptionsButton extends StatelessWidget {
+  const _TrackOptionsButton({required this.track, required this.appState});
+
+  final MusicTrack track;
+  final AppState appState;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: 'Options for ${track.displayMetadata.title}',
+      onPressed: () {
+        unawaited(
+          showModalBottomSheet<void>(
+            context: context,
+            useSafeArea: true,
+            isScrollControlled: true,
+            backgroundColor: Colors.transparent,
+            builder: (sheetContext) => _TrackOptionsSheet(
+              track: track,
+              appState: appState,
+              onAction: (action) {
+                Navigator.pop(sheetContext);
+                unawaited(() async {
+                  await Future<void>.delayed(const Duration(milliseconds: 180));
+                  if (!context.mounted) return;
+                  await _runTrackAction(context, appState, track, action);
+                }());
+              },
+            ),
+          ),
+        );
+      },
+      icon: const Icon(Icons.more_vert_outlined),
+    );
+  }
+}
+
+enum _TrackAction {
+  playback,
+  favorite,
+  playlist,
+  editDetails,
+  findArtwork,
+  trim,
+  sourceDetails,
+  remove,
+}
+
+Future<void> _runTrackAction(
+  BuildContext context,
+  AppState appState,
+  MusicTrack track,
+  _TrackAction action,
+) async {
+  switch (action) {
+    case _TrackAction.playback:
+      if (appState.currentTrack?.id == track.id) {
+        await appState.togglePlayback();
+      } else {
+        await appState.playTrack(track);
+      }
+    case _TrackAction.favorite:
+      final saved = await appState.toggleFavoriteTrack(track.id);
+      if (saved && context.mounted) {
+        showMusicoToast(
+          context,
+          message: appState.favoriteTrackIds.contains(track.id)
+              ? 'Added to favorites.'
+              : 'Removed from favorites.',
+          icon: Icons.favorite_rounded,
+        );
+      }
+    case _TrackAction.playlist:
+      await _showTrackPlaylistsDialog(context, appState, track);
+    case _TrackAction.editDetails:
+      await _showRenameTrackDialog(context, appState, track);
+    case _TrackAction.findArtwork:
+      await _findLicensedArtwork(context, appState, track);
+    case _TrackAction.trim:
+      await _showTrackTrimDialog(context, appState, track);
+    case _TrackAction.sourceDetails:
+      await _showTrackDetails(context, track);
+    case _TrackAction.remove:
+      await _confirmRemoveTrack(context, appState, track);
+  }
+}
+
+class _TrackOptionsSheet extends StatelessWidget {
+  const _TrackOptionsSheet({
+    required this.track,
+    required this.appState,
+    required this.onAction,
+  });
+
+  final MusicTrack track;
+  final AppState appState;
+  final ValueChanged<_TrackAction> onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = track.displayMetadata.title;
+    final artist = track.displayMetadata.artist;
+    final isFavorite = appState.favoriteTrackIds.contains(track.id);
+    final isPlaying =
+        appState.currentTrack?.id == track.id && appState.isPlaying;
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * .82,
+        ),
+        child: Material(
+          color: MusicoPalette.paper,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            side: BorderSide(color: MusicoPalette.line),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 10, bottom: 8),
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: MusicoPalette.glassStrong,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 8, 8, 14),
                 child: Row(
                   children: [
-                    Icon(Icons.playlist_add_rounded),
-                    SizedBox(width: 12),
-                    Text('Add to playlist'),
+                    _PlayerArtwork(track: track, size: 52),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            artist,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: isPlaying ? 'Pause track' : 'Play track',
+                      onPressed: () => onAction(_TrackAction.playback),
+                      icon: Icon(
+                        isPlaying
+                            ? Icons.pause_rounded
+                            : Icons.play_arrow_rounded,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: isFavorite
+                          ? 'Remove from favorites'
+                          : 'Add to favorites',
+                      onPressed: () => onAction(_TrackAction.favorite),
+                      color: isFavorite ? MusicoPalette.terracotta : null,
+                      icon: Icon(
+                        isFavorite
+                            ? Icons.favorite_rounded
+                            : Icons.favorite_border_rounded,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Close track options',
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close_outlined),
+                    ),
                   ],
                 ),
               ),
-              PopupMenuItem(
-                value: 'trim',
-                child: Row(
-                  children: [
-                    Icon(Icons.content_cut_rounded),
-                    SizedBox(width: 12),
-                    Text('Trim playback'),
-                  ],
-                ),
-              ),
-              PopupMenuItem(
-                value: 'remove',
-                child: Row(
-                  children: [
-                    Icon(Icons.delete_outline_rounded),
-                    SizedBox(width: 12),
-                    Text('Remove from device'),
-                  ],
+              const Divider(height: 1),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(10, 8, 10, 16),
+                  child: Column(
+                    children: [
+                      _TrackOptionTile(
+                        icon: Icons.playlist_add_outlined,
+                        title: 'Add to playlist',
+                        subtitle: 'Choose which playlists include this track',
+                        onTap: () => onAction(_TrackAction.playlist),
+                      ),
+                      _TrackOptionTile(
+                        icon: Icons.edit_note_outlined,
+                        title: 'Edit track details',
+                        subtitle: 'Change the title and artist',
+                        onTap: () => onAction(_TrackAction.editDetails),
+                      ),
+                      if (track.artworkPath == null)
+                        _TrackOptionTile(
+                          icon: Icons.image_search_outlined,
+                          title: 'Find licensed artwork',
+                          subtitle:
+                              'Search for matching open-license cover art',
+                          onTap: () => onAction(_TrackAction.findArtwork),
+                        ),
+                      _TrackOptionTile(
+                        icon: Icons.content_cut_outlined,
+                        title: 'Trim playback',
+                        subtitle: 'Set the section used when this track plays',
+                        onTap: () => onAction(_TrackAction.trim),
+                      ),
+                      if (track.sourceUrl != null || track.artworkPath != null)
+                        _TrackOptionTile(
+                          icon: Icons.info_outline_rounded,
+                          title: 'Source and rights',
+                          subtitle: 'View attribution and licensing details',
+                          onTap: () => onAction(_TrackAction.sourceDetails),
+                        ),
+                      const Divider(height: 14),
+                      _TrackOptionTile(
+                        icon: Icons.delete_outline_rounded,
+                        title: 'Remove from library',
+                        subtitle: 'Delete this local track from Musico',
+                        destructive: true,
+                        onTap: () => onAction(_TrackAction.remove),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
           ),
-        ],
+        ),
       ),
+    );
+  }
+}
+
+class _TrackOptionTile extends StatelessWidget {
+  const _TrackOptionTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    this.destructive = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+  final bool destructive;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = destructive ? MusicoPalette.error : MusicoPalette.softInk;
+    return ListTile(
+      onTap: onTap,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+      leading: Icon(icon, color: color),
+      title: Text(title, style: TextStyle(color: color)),
+      subtitle: Text(subtitle),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
     );
   }
 }
@@ -1965,7 +2096,7 @@ class _TrimTimelinePainter extends CustomPainter {
       Offset(xFor(selectedRange.start.round()), lineY),
       Offset(xFor(selectedRange.end.round()), lineY),
       Paint()
-        ..color = MusicoPalette.forest
+        ..color = MusicoPalette.forestLight
         ..strokeWidth = 3,
     );
 
@@ -2020,10 +2151,15 @@ String _formatTimelineTime(int milliseconds) {
 }
 
 class _TrackArtwork extends StatelessWidget {
-  const _TrackArtwork({required this.track, required this.appState});
+  const _TrackArtwork({
+    required this.track,
+    required this.appState,
+    this.size = 44,
+  });
 
   final MusicTrack track;
   final AppState appState;
+  final double size;
 
   @override
   Widget build(BuildContext context) {
@@ -2037,12 +2173,13 @@ class _TrackArtwork extends StatelessWidget {
     final content = artworkPath != null
         ? Image.file(
             File(artworkPath),
-            width: 44,
-            height: 44,
+            width: size,
+            height: size,
             fit: BoxFit.cover,
-            errorBuilder: (_, _, _) => _trackArtworkFallback(track, appState),
+            errorBuilder: (_, _, _) =>
+                _trackArtworkFallback(track, appState, size),
           )
-        : _trackArtworkFallback(track, appState);
+        : _trackArtworkFallback(track, appState, size);
     return Tooltip(
       message:
           error ??
@@ -2050,8 +2187,8 @@ class _TrackArtwork extends StatelessWidget {
               ? 'No open-license artwork match. Use track options to retry.'
               : 'Play ${track.displayMetadata.title}'),
       child: SizedBox(
-        width: 44,
-        height: 44,
+        width: size,
+        height: size,
         child: Stack(
           fit: StackFit.expand,
           children: [
@@ -2096,9 +2233,13 @@ class _TrackArtwork extends StatelessWidget {
   }
 }
 
-Widget _trackArtworkFallback(MusicTrack track, AppState appState) => Container(
-  width: 44,
-  height: 44,
+Widget _trackArtworkFallback(
+  MusicTrack track,
+  AppState appState, [
+  double size = 44,
+]) => Container(
+  width: size,
+  height: size,
   decoration: BoxDecoration(
     color: MusicoPalette.canvasAlt,
     borderRadius: BorderRadius.circular(11),
@@ -2108,9 +2249,9 @@ Widget _trackArtworkFallback(MusicTrack track, AppState appState) => Container(
       appState.currentTrack?.id == track.id && appState.isPlaying
           ? Icons.pause_rounded
           : Icons.play_arrow_rounded,
-      size: 21,
+      size: size * .48,
       color: appState.currentTrack?.id == track.id
-          ? MusicoPalette.forest
+          ? MusicoPalette.forestLight
           : MusicoPalette.muted,
     ),
   ),
@@ -2425,12 +2566,8 @@ class PlayerDock extends StatelessWidget {
         return Container(
           height: 88,
           decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0xFF1C1732), Color(0xFF111018)],
-            ),
-            border: Border(top: BorderSide(color: MusicoPalette.glassStrong)),
+            color: MusicoPalette.paper,
+            border: Border(top: BorderSide(color: MusicoPalette.line)),
           ),
           padding: const EdgeInsets.symmetric(horizontal: 26),
           child: Row(
@@ -2460,7 +2597,7 @@ class PlayerDock extends StatelessWidget {
                               : 'Shuffle off',
                           onPressed: appState.toggleShuffle,
                           icon: Icon(
-                            Icons.shuffle_rounded,
+                            Icons.shuffle_outlined,
                             size: 18,
                             color: appState.shuffle
                                 ? MusicoPalette.terracotta
@@ -2502,7 +2639,7 @@ class PlayerDock extends StatelessWidget {
                               : 'Repeat off',
                           onPressed: appState.toggleRepeatOne,
                           icon: Icon(
-                            Icons.repeat_one_rounded,
+                            Icons.repeat_one_outlined,
                             size: 18,
                             color: appState.repeatOne
                                 ? MusicoPalette.terracotta
@@ -2527,15 +2664,7 @@ class PlayerDock extends StatelessWidget {
                         ),
                         Expanded(
                           child: SliderTheme(
-                            data: SliderTheme.of(context).copyWith(
-                              trackHeight: 3,
-                              thumbShape: const RoundSliderThumbShape(
-                                enabledThumbRadius: 5,
-                              ),
-                              overlayShape: const RoundSliderOverlayShape(
-                                overlayRadius: 12,
-                              ),
-                            ),
+                            data: _playbackProgressSliderTheme(context),
                             child: Slider(
                               min: 0,
                               max: 1,
@@ -2577,7 +2706,7 @@ class PlayerDock extends StatelessWidget {
                       visualDensity: VisualDensity.compact,
                       onPressed: () => appState.setAutoplay(!appState.autoplay),
                       icon: Icon(
-                        Icons.playlist_play_rounded,
+                        Icons.playlist_play_outlined,
                         size: 19,
                         color: appState.autoplay
                             ? MusicoPalette.terracotta
@@ -2593,7 +2722,7 @@ class PlayerDock extends StatelessWidget {
                         !appState.sortAlphabetically,
                       ),
                       icon: Icon(
-                        Icons.sort_by_alpha_rounded,
+                        Icons.sort_by_alpha_outlined,
                         size: 19,
                         color: appState.sortAlphabetically
                             ? MusicoPalette.terracotta
@@ -2628,90 +2757,426 @@ class PlayerDock extends StatelessWidget {
 
 Future<void> _showLyricsSheet(BuildContext context, AppState appState) async {
   if (appState.currentTrack == null) return;
-  await showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    useSafeArea: true,
-    showDragHandle: true,
-    backgroundColor: MusicoPalette.paper,
-    builder: (context) => AnimatedBuilder(
-      animation: appState,
-      builder: (context, _) {
-        final track = appState.currentTrack;
-        if (track == null) return const SizedBox.shrink();
-        final status = appState.lyricsStatus;
-        final message = switch (status) {
-          LyricsStatus.networkRequired =>
-            'Connect to the internet to look up lyrics.',
-          LyricsStatus.loading => 'Looking up lyrics…',
-          LyricsStatus.loaded => '',
-          LyricsStatus.notFound => 'No lyrics were found for this track.',
-          LyricsStatus.error =>
-            appState.lyricsErrorMessage ?? 'Lyrics could not be loaded.',
-          LyricsStatus.idle => 'Lyrics are ready when you are.',
-        };
-
-        return DraggableScrollableSheet(
-          expand: false,
-          initialChildSize: .78,
-          minChildSize: .45,
-          maxChildSize: .94,
-          builder: (context, scrollController) => ListView(
-            controller: scrollController,
-            padding: const EdgeInsets.fromLTRB(24, 8, 24, 28),
-            children: [
-              Text('Lyrics', style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: 4),
-              Text(
-                '${track.displayMetadata.title} · ${track.displayMetadata.artist}',
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const SizedBox(height: 20),
-              if (status == LyricsStatus.loading) ...[
-                const LinearProgressIndicator(minHeight: 2),
-                const SizedBox(height: 14),
-              ],
-              if (status == LyricsStatus.loaded)
-                SelectableText(
-                  appState.lyrics!,
-                  style: Theme.of(context).textTheme.bodyMedium
-                      ?.copyWith(color: MusicoPalette.ink, height: 1.8),
-                )
-              else ...[
-                Text(
-                  message,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: status == LyricsStatus.error
-                        ? MusicoPalette.error
-                        : MusicoPalette.muted,
-                    height: 1.5,
-                  ),
+  final reduceMotion = MediaQuery.disableAnimationsOf(context);
+  await Navigator.of(context, rootNavigator: true).push<void>(
+    PageRouteBuilder<void>(
+      fullscreenDialog: true,
+      transitionDuration: reduceMotion
+          ? Duration.zero
+          : const Duration(milliseconds: 240),
+      reverseTransitionDuration: reduceMotion
+          ? Duration.zero
+          : const Duration(milliseconds: 200),
+      pageBuilder: (context, _, _) =>
+          _LyricsExperienceScreen(appState: appState),
+      transitionsBuilder: (context, animation, _, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+        );
+        return FadeTransition(
+          opacity: curved,
+          child: reduceMotion
+              ? child
+              : SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0, .025),
+                    end: Offset.zero,
+                  ).animate(curved),
+                  child: child,
                 ),
-                if (status != LyricsStatus.loading) ...[
-                  const SizedBox(height: 14),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: FilledButton.icon(
-                      onPressed: appState.fetchLyricsForCurrent,
-                      icon: const Icon(Icons.search_rounded, size: 17),
-                      label: Text(
-                        status == LyricsStatus.error ||
-                                status == LyricsStatus.notFound
-                            ? 'Try again'
-                            : 'Find lyrics',
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ],
-          ),
         );
       },
     ),
   );
+}
+
+class _LyricsExperienceScreen extends StatelessWidget {
+  const _LyricsExperienceScreen({required this.appState});
+
+  final AppState appState;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: appState,
+      builder: (context, _) {
+        final track = appState.currentTrack;
+        if (track == null) {
+          return Scaffold(
+            backgroundColor: MusicoPalette.canvas,
+            body: SafeArea(
+              child: Center(
+                child: TextButton.icon(
+                  onPressed: Navigator.of(context).maybePop,
+                  icon: const Icon(Icons.close_rounded),
+                  label: const Text('Close lyrics'),
+                ),
+              ),
+            ),
+          );
+        }
+
+        final hasSyncedLyrics = appState.syncedLyricLines.isNotEmpty;
+        return Scaffold(
+          backgroundColor: MusicoPalette.canvas,
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (track.artworkPath case final artworkPath?)
+                Positioned.fill(
+                  child: ExcludeSemantics(
+                    child: Opacity(
+                      opacity: .32,
+                      child: Image.file(
+                        File(artworkPath),
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                      ),
+                    ),
+                  ),
+                ),
+              Positioned.fill(
+                child: ColoredBox(
+                  color: MusicoPalette.canvas.withValues(alpha: .8),
+                ),
+              ),
+              SafeArea(
+                child: Column(
+                  children: [
+                    _LyricsExperienceHeader(
+                      track: track,
+                      hasSyncedLyrics: hasSyncedLyrics,
+                      lyricsStatus: appState.lyricsStatus,
+                      onClose: Navigator.of(context).maybePop,
+                    ),
+                    Expanded(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final sidePadding = constraints.maxWidth >= 1000
+                              ? 64.0
+                              : 20.0;
+                          return Padding(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: sidePadding,
+                              vertical: 12,
+                            ),
+                            child: Center(
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 820,
+                                ),
+                                child: _LyricsExperienceContent(
+                                  appState: appState,
+                                  trackId: track.id,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    _LyricsTransportControls(appState: appState),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _LyricsExperienceHeader extends StatelessWidget {
+  const _LyricsExperienceHeader({
+    required this.track,
+    required this.hasSyncedLyrics,
+    required this.lyricsStatus,
+    required this.onClose,
+  });
+
+  final MusicTrack track;
+  final bool hasSyncedLyrics;
+  final LyricsStatus lyricsStatus;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 20, 12),
+      child: Row(
+        children: [
+          IconButton(
+            tooltip: 'Close lyrics',
+            onPressed: onClose,
+            icon: const Icon(Icons.close_rounded),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  track.displayMetadata.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  track.displayMetadata.artist,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+            decoration: BoxDecoration(
+              color: MusicoPalette.glassStrong,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  hasSyncedLyrics
+                      ? Icons.graphic_eq_outlined
+                      : Icons.notes_rounded,
+                  size: 15,
+                  color: hasSyncedLyrics
+                      ? MusicoPalette.olive
+                      : MusicoPalette.muted,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  hasSyncedLyrics
+                      ? 'SYNCED'
+                      : lyricsStatus == LyricsStatus.loaded
+                      ? 'UNSYNCED'
+                      : lyricsStatus == LyricsStatus.loading
+                      ? 'SEARCHING'
+                      : 'LYRICS',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: .5,
+                    color: hasSyncedLyrics
+                        ? MusicoPalette.olive
+                        : MusicoPalette.softInk,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LyricsExperienceContent extends StatelessWidget {
+  const _LyricsExperienceContent({
+    required this.appState,
+    required this.trackId,
+  });
+
+  final AppState appState;
+  final String trackId;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = appState.lyricsStatus;
+    if (status == LyricsStatus.loaded) {
+      if (appState.syncedLyricLines.isNotEmpty) {
+        return SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(vertical: 120),
+          child: _SyncedLyricsDocument(
+            key: ValueKey(trackId),
+            lines: appState.syncedLyricLines,
+            activeIndex: appState.activeLyricIndex,
+          ),
+        );
+      }
+      return SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 12),
+        child: SelectableText(
+          appState.lyrics!,
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.bodyLarge
+              ?.copyWith(color: MusicoPalette.ink, height: 1.8),
+        ),
+      );
+    }
+
+    final message = switch (status) {
+      LyricsStatus.networkRequired =>
+        'Connect to the internet to look up lyrics.',
+      LyricsStatus.loading => 'Finding lyrics for this track…',
+      LyricsStatus.notFound => 'Lyrics are not available for this track yet.',
+      LyricsStatus.error =>
+        appState.lyricsErrorMessage ?? 'Lyrics could not be loaded.',
+      LyricsStatus.idle => 'Find lyrics for this track.',
+      LyricsStatus.loaded => '',
+    };
+    final loading = status == LyricsStatus.loading;
+
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            loading ? Icons.lyrics_outlined : Icons.search_outlined,
+            size: 30,
+            color: MusicoPalette.muted,
+          ),
+          const SizedBox(height: 16),
+          if (loading)
+            const SizedBox(
+              width: 180,
+              child: LinearProgressIndicator(minHeight: 2),
+            ),
+          const SizedBox(height: 12),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+              color: status == LyricsStatus.error
+                  ? MusicoPalette.error
+                  : MusicoPalette.softInk,
+            ),
+          ),
+          if (!loading) ...[
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: appState.fetchLyricsForCurrent,
+              icon: const Icon(Icons.search_outlined, size: 17),
+              label: Text(
+                status == LyricsStatus.error || status == LyricsStatus.notFound
+                    ? 'Try again'
+                    : 'Find lyrics',
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _LyricsTransportControls extends StatelessWidget {
+  const _LyricsTransportControls({required this.appState});
+
+  final AppState appState;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<Duration>(
+      stream: appState.player.positionStream,
+      initialData: appState.player.position,
+      builder: (context, snapshot) {
+        final position = snapshot.data ?? Duration.zero;
+        final duration = appState.duration;
+        final hasDuration = duration.inMilliseconds > 0;
+        final value = hasDuration
+            ? position.inMilliseconds
+                  .clamp(0, duration.inMilliseconds)
+                  .toDouble()
+            : 0.0;
+
+        return Container(
+          width: double.infinity,
+          decoration: const BoxDecoration(
+            border: Border(top: BorderSide(color: MusicoPalette.line)),
+          ),
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 14),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 720),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 42,
+                        child: Text(
+                          _formatDuration(position),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                      Expanded(
+                        child: SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            activeTrackColor: MusicoPalette.olive,
+                            thumbColor: MusicoPalette.olive,
+                            inactiveTrackColor: MusicoPalette.glassStrong,
+                          ),
+                          child: Slider(
+                            min: 0,
+                            max: hasDuration
+                                ? duration.inMilliseconds.toDouble()
+                                : 1,
+                            value: value,
+                            onChanged: hasDuration
+                                ? (value) => unawaited(
+                                    appState.seek(
+                                      Duration(milliseconds: value.round()),
+                                    ),
+                                  )
+                                : null,
+                          ),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 42,
+                        child: Text(
+                          hasDuration ? _formatDuration(duration) : '--:--',
+                          textAlign: TextAlign.right,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        tooltip: 'Play previous',
+                        onPressed: appState.currentTrack == null
+                            ? null
+                            : appState.playPrevious,
+                        icon: const Icon(Icons.skip_previous_rounded, size: 28),
+                      ),
+                      const SizedBox(width: 16),
+                      _PlayButton(
+                        playing: appState.isPlaying,
+                        canPlay: appState.currentTrack != null,
+                        onPressed: appState.togglePlayback,
+                        size: 52,
+                      ),
+                      const SizedBox(width: 16),
+                      IconButton(
+                        tooltip: 'Play next',
+                        onPressed: appState.currentTrack == null
+                            ? null
+                            : appState.playNext,
+                        icon: const Icon(Icons.skip_next_rounded, size: 28),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 class _CompactPlayer extends StatelessWidget {
@@ -2809,8 +3274,8 @@ class _CompactPlayer extends StatelessWidget {
 
             return LayoutBuilder(
               builder: (context, constraints) {
-                final artworkSize = (constraints.maxWidth - 48)
-                    .clamp(0.0, 340.0)
+                final artworkSize = (constraints.maxWidth * .62)
+                    .clamp(220.0, 360.0)
                     .toDouble();
                 return ListView(
                   controller: scrollController,
@@ -2818,17 +3283,19 @@ class _CompactPlayer extends StatelessWidget {
                   children: [
                     Row(
                       children: [
+                        IconButton.filledTonal(
+                          tooltip: 'Close player',
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(Icons.arrow_back_rounded),
+                        ),
                         Expanded(
                           child: Text(
                             'Now playing',
+                            textAlign: TextAlign.center,
                             style: Theme.of(context).textTheme.titleMedium,
                           ),
                         ),
-                        IconButton(
-                          tooltip: 'Close player',
-                          onPressed: () => Navigator.pop(context),
-                          icon: const Icon(Icons.expand_more_rounded),
-                        ),
+                        const SizedBox(width: 48),
                       ],
                     ),
                     if (track == null) ...[
@@ -2856,18 +3323,45 @@ class _CompactPlayer extends StatelessWidget {
                     ] else ...[
                       const SizedBox(height: 12),
                       Center(
-                        child: _PlayerArtwork(track: track, size: artworkSize),
+                        child: _PlayerArtwork(
+                          track: track,
+                          size: artworkSize,
+                          circular: true,
+                        ),
                       ),
                       const SizedBox(height: 23),
                       Row(
                         children: [
                           Expanded(
-                            child: _PlayerTrackInfo(
-                              track: track,
-                              playing: appState.isPlaying,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Text(
+                                  track.displayMetadata.title,
+                                  textAlign: TextAlign.center,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.titleMedium
+                                      ?.copyWith(fontSize: 17),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  '${track.displayMetadata.artist}${track.license == null ? '' : ' · ${track.license}'}',
+                                  textAlign: TextAlign.center,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.bodyMedium
+                                      ?.copyWith(
+                                        color: appState.isPlaying
+                                            ? MusicoPalette.moss
+                                            : MusicoPalette.muted,
+                                      ),
+                                ),
+                              ],
                             ),
                           ),
-                          if (track.license != null)
+                          if (track.sourceUrl != null ||
+                              track.artworkPath != null)
                             IconButton(
                               tooltip: 'View source and rights',
                               onPressed: () =>
@@ -2891,17 +3385,20 @@ class _CompactPlayer extends StatelessWidget {
                               .toDouble();
                           return Column(
                             children: [
-                              Slider(
-                                min: 0,
-                                max: maxMs,
-                                value: value,
-                                onChanged: total == Duration.zero
-                                    ? null
-                                    : (milliseconds) => appState.seek(
-                                        Duration(
-                                          milliseconds: milliseconds.round(),
+                              SliderTheme(
+                                data: _playbackProgressSliderTheme(context),
+                                child: Slider(
+                                  min: 0,
+                                  max: maxMs,
+                                  value: value,
+                                  onChanged: total == Duration.zero
+                                      ? null
+                                      : (milliseconds) => appState.seek(
+                                          Duration(
+                                            milliseconds: milliseconds.round(),
+                                          ),
                                         ),
-                                      ),
+                                ),
                               ),
                               Padding(
                                 padding: const EdgeInsets.symmetric(
@@ -2940,9 +3437,9 @@ class _CompactPlayer extends StatelessWidget {
                                 : 'Shuffle off',
                             onPressed: appState.toggleShuffle,
                             color: appState.shuffle
-                                ? MusicoPalette.forest
+                                ? MusicoPalette.forestLight
                                 : MusicoPalette.muted,
-                            icon: const Icon(Icons.shuffle_rounded),
+                            icon: const Icon(Icons.shuffle_outlined),
                           ),
                           IconButton(
                             tooltip: 'Play previous',
@@ -2969,19 +3466,37 @@ class _CompactPlayer extends StatelessWidget {
                                 : 'Repeat off',
                             onPressed: appState.toggleRepeatOne,
                             color: appState.repeatOne
-                                ? MusicoPalette.forest
+                                ? MusicoPalette.forestLight
                                 : MusicoPalette.muted,
-                            icon: const Icon(Icons.repeat_one_rounded),
+                            icon: const Icon(Icons.repeat_one_outlined),
                           ),
                         ],
                       ),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton.icon(
-                          onPressed: () => _showLyricsSheet(context, appState),
-                          icon: const Icon(Icons.lyrics_outlined),
-                          label: const Text('Lyrics'),
-                        ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          TextButton.icon(
+                            style: TextButton.styleFrom(
+                              foregroundColor: appState.autoplay
+                                  ? MusicoPalette.moss
+                                  : MusicoPalette.muted,
+                            ),
+                            onPressed: () =>
+                                appState.setAutoplay(!appState.autoplay),
+                            icon: const Icon(Icons.playlist_play_outlined),
+                            label: Text(
+                              appState.autoplay
+                                  ? 'Autoplay on'
+                                  : 'Autoplay off',
+                            ),
+                          ),
+                          TextButton.icon(
+                            onPressed: () =>
+                                _showLyricsSheet(context, appState),
+                            icon: const Icon(Icons.lyrics_outlined),
+                            label: const Text('Lyrics'),
+                          ),
+                        ],
                       ),
                       if (upNext.isNotEmpty) ...[
                         const SizedBox(height: 13),
@@ -3020,10 +3535,15 @@ class _CompactPlayer extends StatelessWidget {
 }
 
 class _PlayerArtwork extends StatelessWidget {
-  const _PlayerArtwork({required this.track, required this.size});
+  const _PlayerArtwork({
+    required this.track,
+    required this.size,
+    this.circular = false,
+  });
 
   final MusicTrack? track;
   final double size;
+  final bool circular;
 
   @override
   Widget build(BuildContext context) {
@@ -3032,13 +3552,13 @@ class _PlayerArtwork extends StatelessWidget {
       color: MusicoPalette.surface,
       alignment: Alignment.center,
       child: Icon(
-        Icons.graphic_eq_rounded,
+        Icons.graphic_eq_outlined,
         color: MusicoPalette.olive,
         size: size * .52,
       ),
     );
     return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(circular ? size / 2 : 10),
       child: SizedBox(
         width: size,
         height: size,
@@ -3113,36 +3633,22 @@ class _PlayButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Tooltip(
       message: playing ? 'Pause' : 'Play',
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          boxShadow: canPlay
-              ? [
-                  BoxShadow(
-                    color: MusicoPalette.olive.withValues(alpha: .34),
-                    blurRadius: 20,
-                    spreadRadius: 1,
-                  ),
-                ]
-              : null,
-        ),
-        child: Material(
-          color: canPlay ? MusicoPalette.olive : MusicoPalette.canvasAlt,
-          shape: const CircleBorder(),
-          child: InkWell(
-            onTap: canPlay ? onPressed : null,
-            mouseCursor: canPlay
-                ? SystemMouseCursors.click
-                : SystemMouseCursors.basic,
-            customBorder: const CircleBorder(),
-            child: SizedBox(
-              width: size,
-              height: size,
-              child: Icon(
-                playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                color: canPlay ? MusicoPalette.canvas : MusicoPalette.muted,
-                size: 20,
-              ),
+      child: Material(
+        color: canPlay ? MusicoPalette.forest : MusicoPalette.canvasAlt,
+        shape: const CircleBorder(),
+        child: InkWell(
+          onTap: canPlay ? onPressed : null,
+          mouseCursor: canPlay
+              ? SystemMouseCursors.click
+              : SystemMouseCursors.basic,
+          customBorder: const CircleBorder(),
+          child: SizedBox(
+            width: size,
+            height: size,
+            child: Icon(
+              playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+              color: canPlay ? MusicoPalette.white : MusicoPalette.muted,
+              size: 20,
             ),
           ),
         ),
@@ -3151,10 +3657,44 @@ class _PlayButton extends StatelessWidget {
   }
 }
 
+SliderThemeData _playbackProgressSliderTheme(BuildContext context) =>
+    SliderTheme.of(context).copyWith(
+      trackHeight: 4,
+      activeTrackColor: MusicoPalette.forestLight,
+      inactiveTrackColor: MusicoPalette.glassStrong,
+      thumbColor: MusicoPalette.forestLight,
+      overlayColor: MusicoPalette.forestLight.withValues(alpha: .14),
+      thumbShape: const RoundSliderThumbShape(
+        enabledThumbRadius: 9,
+        elevation: 1,
+        pressedElevation: 2,
+      ),
+      overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
+    );
+
 String _formatDuration(Duration duration) {
   final minutes = duration.inMinutes;
   final seconds = (duration.inSeconds % 60).toString().padLeft(2, '0');
   return '$minutes:$seconds';
+}
+
+String _formatTrackDate(int timestampMs) {
+  final date = DateTime.fromMillisecondsSinceEpoch(timestampMs);
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  return '${date.day} ${months[date.month - 1]} ${date.year}';
 }
 
 Future<void> _showTrackDetails(BuildContext context, MusicTrack track) {
@@ -3215,7 +3755,7 @@ Future<void> _showTrackDetails(BuildContext context, MusicTrack track) {
               if (track.sourceUrl != null && !track.isFromCommons) ...[
                 const SizedBox(height: 12),
                 Text(
-                  'The rights label for this configured download is user-provided and was not independently verified.',
+                  'Rights information is user-provided and has not been independently verified.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -3245,6 +3785,29 @@ Future<void> _showVideoDetails(BuildContext context, VideoTrack video) {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (video.artworkPath != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: LocalVideoArtwork(video: video, size: 96),
+                ),
+              if (video.originalTitle case final originalTitle?)
+                _VideoDetailValue(
+                  label: 'Original title',
+                  value: originalTitle,
+                ),
+              if (video.artist case final artist?)
+                _VideoDetailValue(label: 'Channel', value: artist),
+              if (video.quality case final quality?)
+                _VideoDetailValue(label: 'Downloaded quality', value: quality),
+              if (video.videoId case final videoId?)
+                _VideoDetailValue(label: 'Video ID', value: videoId),
+              if (video.durationMs > 0)
+                _VideoDetailValue(
+                  label: 'Duration',
+                  value: _formatDuration(
+                    Duration(milliseconds: video.durationMs),
+                  ),
+                ),
               if (video.rights case final rights?) ...[
                 const Text('Rights'),
                 const SizedBox(height: 3),
@@ -3258,13 +3821,13 @@ Future<void> _showVideoDetails(BuildContext context, VideoTrack video) {
                 const SizedBox(height: 10),
               ],
               if (video.sourceUrl case final sourceUrl?) ...[
-                const Text('Direct source URL'),
+                const Text('Source URL'),
                 const SizedBox(height: 3),
                 SelectableText(sourceUrl),
                 const SizedBox(height: 10),
               ],
               const Text(
-                'The rights label for this configured download is user-provided and was not independently verified.',
+                'Rights information is user-provided and has not been independently verified.',
               ),
             ],
           ),
@@ -3278,4 +3841,26 @@ Future<void> _showVideoDetails(BuildContext context, VideoTrack video) {
       ],
     ),
   );
+}
+
+class _VideoDetailValue extends StatelessWidget {
+  const _VideoDetailValue({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label),
+          const SizedBox(height: 3),
+          SelectableText(value),
+        ],
+      ),
+    );
+  }
 }

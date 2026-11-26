@@ -28,8 +28,6 @@ const _reservedWindowsNames = {
   'LPT9',
 };
 
-/// Turns a user-typed name into a name that is safe for a file on Windows,
-/// Android and Linux.
 String sanitizeYouTubeFileName(String value) {
   var name = value
       .replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1f]'), '_')
@@ -46,7 +44,6 @@ String sanitizeYouTubeFileName(String value) {
   return name;
 }
 
-/// Everything the downloader needs to rip one video under a user-chosen name.
 class YouTubeRipRequest {
   const YouTubeRipRequest({
     required this.videoId,
@@ -56,6 +53,7 @@ class YouTubeRipRequest {
     required this.channel,
     required this.format,
     this.quality,
+    this.formatId,
     this.durationMs,
     this.thumbnailUrl,
   });
@@ -63,21 +61,19 @@ class YouTubeRipRequest {
   final String videoId;
   final String videoUrl;
 
-  /// Name the user asked for; used for the file name and the embedded title.
   final String requestedName;
 
-  /// The video's real YouTube title, kept in the metadata sidecar.
   final String originalTitle;
   final String channel;
   final YouTubeDownloadFormat format;
   final String? quality;
+  final int? formatId;
   final int? durationMs;
   final String? thumbnailUrl;
 
   String get safeFileName => sanitizeYouTubeFileName(requestedName);
 }
 
-/// Details written to a small `.metadata.json` file beside every ripped file.
 class YouTubeDownloadMetadata {
   const YouTubeDownloadMetadata({
     required this.requestedName,
@@ -127,6 +123,9 @@ class YouTubeDownloadMetadata {
     if (byteSize != null) 'byteSize': byteSize,
   };
 
+  static String pathFor(File mediaFile) =>
+      mediaFile.path.replaceFirst(RegExp(r'\.[^./\\]+$'), '.metadata.json');
+
   factory YouTubeDownloadMetadata.fromJson(Map<String, dynamic> json) {
     return YouTubeDownloadMetadata(
       requestedName: json['requestedName'] as String? ?? '',
@@ -145,13 +144,8 @@ class YouTubeDownloadMetadata {
     );
   }
 
-  /// Writes the sidecar next to [mediaFile], e.g. `My song.metadata.json`.
   Future<File> writeNextTo(File mediaFile) async {
-    final path = mediaFile.path.replaceFirst(
-      RegExp(r'\.[^./\\]+$'),
-      '.metadata.json',
-    );
-    final file = File(path);
+    final file = File(pathFor(mediaFile));
     await file.writeAsString(
       '${const JsonEncoder.withIndent('  ').convert(toJson())}\n',
       flush: true,

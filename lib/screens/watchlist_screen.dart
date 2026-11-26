@@ -2,12 +2,10 @@ import 'dart:io';
 
 import 'package:material_ui/material_ui.dart';
 
-import '../models/media_download.dart';
 import '../models/media_title.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/musico_widgets.dart';
-import '../widgets/configured_downloads_dialog.dart';
 
 class WatchlistScreen extends StatelessWidget {
   const WatchlistScreen({required this.appState, super.key});
@@ -17,12 +15,22 @@ class WatchlistScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width > 1050;
+    final datedTitles =
+        appState.watchlist
+            .where((title) => _watchlistDate(title) != null)
+            .toList()
+          ..sort((first, second) {
+            return _watchlistDate(first)!.compareTo(_watchlistDate(second)!);
+          });
+    final undatedTitles = appState.watchlist
+        .where((title) => _watchlistDate(title) == null)
+        .toList();
     return ListView(
       padding: EdgeInsets.fromLTRB(wide ? 52 : 26, 33, wide ? 52 : 26, 35),
       children: [
         _WatchlistHeading(appState: appState),
         const SizedBox(height: 22),
-        _ReminderCard(appState: appState),
+        _ReminderRow(appState: appState),
         if (appState.errorMessage != null) ...[
           const SizedBox(height: 8),
           Row(
@@ -48,46 +56,44 @@ class WatchlistScreen extends StatelessWidget {
           ),
         ],
         const SizedBox(height: 29),
-        SectionHeading(
-          title: 'What’s on your list',
-          detail: '${appState.watchlist.length} saved movies and series',
-          trailing: Icon(
-            Icons.bookmarks_outlined,
-            color: MusicoPalette.terracotta,
-            size: 20,
-          ),
-        ),
-        const SizedBox(height: 13),
         if (appState.watchlist.isEmpty)
           const _EmptyWatchlist()
-        else
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final width = constraints.maxWidth;
-              final columns = width >= 980
-                  ? 3
-                  : width >= 650
-                  ? 2
-                  : 1;
-              const gap = 11.0;
-              final itemWidth = (width - gap * (columns - 1)) / columns;
-              return Wrap(
-                spacing: gap,
-                runSpacing: gap,
-                children: [
-                  for (final title in appState.watchlist)
-                    SizedBox(
-                      width: itemWidth,
-                      child: _WatchlistItem(title: title, appState: appState),
-                    ),
-                ],
-              );
-            },
-          ),
+        else ...[
+          if (datedTitles.isNotEmpty) ...[
+            SectionHeading(
+              title: 'Dates announced',
+              detail:
+                  '${datedTitles.length} ${datedTitles.length == 1 ? 'title' : 'titles'} sorted by next release',
+            ),
+            const SizedBox(height: 4),
+            for (var index = 0; index < datedTitles.length; index++) ...[
+              _WatchlistItem(title: datedTitles[index], appState: appState),
+              if (index < datedTitles.length - 1)
+                const Divider(height: 1, indent: 74),
+            ],
+          ],
+          if (undatedTitles.isNotEmpty) ...[
+            const SizedBox(height: 24),
+            SectionHeading(
+              title: 'Waiting for a date',
+              detail:
+                  '${undatedTitles.length} ${undatedTitles.length == 1 ? 'title' : 'titles'} without a published schedule',
+            ),
+            const SizedBox(height: 4),
+            for (var index = 0; index < undatedTitles.length; index++) ...[
+              _WatchlistItem(title: undatedTitles[index], appState: appState),
+              if (index < undatedTitles.length - 1)
+                const Divider(height: 1, indent: 74),
+            ],
+          ],
+        ],
       ],
     );
   }
 }
+
+DateTime? _watchlistDate(MediaTitle title) =>
+    title.nextAiring?.airingAt ?? title.startDate;
 
 Future<void> _toggleAiringNotifications(
   BuildContext context,
@@ -118,7 +124,6 @@ class _WatchlistHeading extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width < 560;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
@@ -134,114 +139,72 @@ class _WatchlistHeading extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'A place for the next episode, season or premiere.',
+                '${appState.watchlist.length} saved titles, ordered by when they return.',
                 style: Theme.of(context).textTheme.bodyMedium
                     ?.copyWith(color: MusicoPalette.muted),
               ),
             ],
           ),
         ),
-        if (!compact) ...[
-          const SizedBox(width: 14),
-          FilledButton.tonalIcon(
-            onPressed: () => _toggleAiringNotifications(context, appState),
-            icon: Icon(
-              appState.notificationsEnabled
-                  ? Icons.notifications_active_outlined
-                  : Icons.notifications_none_rounded,
-              size: 17,
-            ),
-            label: Text(
-              appState.notificationsEnabled
-                  ? 'Alerts on'
-                  : 'Get release alerts',
-            ),
-            style: FilledButton.styleFrom(
-              backgroundColor: appState.notificationsEnabled
-                  ? MusicoPalette.olive
-                  : MusicoPalette.canvasAlt,
-              foregroundColor: MusicoPalette.ink,
-            ),
-          ),
-        ],
       ],
     );
   }
 }
 
-class _ReminderCard extends StatelessWidget {
-  const _ReminderCard({required this.appState});
+class _ReminderRow extends StatelessWidget {
+  const _ReminderRow({required this.appState});
 
   final AppState appState;
 
   @override
   Widget build(BuildContext context) {
     final platform = Platform.isAndroid ? 'Android' : 'Windows';
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: MusicoPalette.sky.withValues(alpha: .85),
-        border: Border.all(color: MusicoPalette.line),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Container(
-            width: 35,
-            height: 35,
-            decoration: BoxDecoration(
-              color: MusicoPalette.white,
-              borderRadius: BorderRadius.circular(11),
-            ),
-            child: const Icon(
+    return Column(
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            const Icon(
               Icons.notifications_active_outlined,
-              size: 17,
-              color: MusicoPalette.forest,
+              size: 18,
+              color: MusicoPalette.forestLight,
             ),
-          ),
-          const SizedBox(width: 11),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  appState.notificationsEnabled
-                      ? 'Release reminders are on.'
-                      : 'A little reminder when it’s time.',
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  appState.notificationsEnabled
-                      ? 'Musico can notify you of scheduled episodes and premieres.'
-                      : 'Turn on $platform notifications for scheduled episode and movie-premiere reminders.',
-                  style: Theme.of(context).textTheme.bodySmall
-                      ?.copyWith(fontSize: 11, height: 1.5),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          if (MediaQuery.sizeOf(context).width >= 500)
-            appState.notificationsEnabled
-                ? Switch.adaptive(
-                    value: true,
-                    activeTrackColor: MusicoPalette.moss,
-                    onChanged: (_) =>
-                        _toggleAiringNotifications(context, appState),
-                  )
-                : FilledButton(
-                    onPressed: () =>
-                        _toggleAiringNotifications(context, appState),
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size(44, 37),
-                      padding: const EdgeInsets.symmetric(horizontal: 11),
-                    ),
-                    child: const Text('Enable'),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    !appState.notificationsAvailable
+                        ? 'Release reminders unavailable'
+                        : appState.notificationsEnabled
+                        ? 'Release reminders are on'
+                        : 'Release reminders are off',
+                    style: Theme.of(context).textTheme.titleSmall,
                   ),
-        ],
-      ),
+                  Text(
+                    !appState.notificationsAvailable
+                        ? 'Notifications are not available on this device.'
+                        : appState.notificationsEnabled
+                        ? 'New episodes and premieres can notify you.'
+                        : 'Enable $platform notifications for episodes and premieres.',
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(height: 1.4),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Switch.adaptive(
+              value: appState.notificationsEnabled,
+              onChanged: appState.notificationsAvailable
+                  ? (_) => _toggleAiringNotifications(context, appState)
+                  : null,
+            ),
+          ],
+        ),
+        const Divider(height: 22),
+      ],
     );
   }
 }
@@ -268,25 +231,20 @@ class _WatchlistItem extends StatelessWidget {
         ? '${_formatDate(upcoming)} · premiere'
         : 'Release date not announced';
 
-    return Container(
-      padding: const EdgeInsets.all(11),
-      decoration: BoxDecoration(
-        color: MusicoPalette.paper,
-        border: Border.all(color: MusicoPalette.line),
-        borderRadius: BorderRadius.circular(16),
-      ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 13),
       child: Row(
         children: [
           PosterArtwork(
             imageUrl: title.imageUrl,
             title: title.title,
-            width: 71,
-            height: 99,
+            width: 62,
+            height: 86,
           ),
           const SizedBox(width: 12),
           Expanded(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 99),
+              constraints: const BoxConstraints(minHeight: 86),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -299,7 +257,7 @@ class _WatchlistItem extends StatelessWidget {
                           : MusicoPalette.canvasAlt,
                       foreground: title.isMovie
                           ? MusicoPalette.terracotta
-                          : MusicoPalette.forest,
+                          : MusicoPalette.forestLight,
                     ),
                   const SizedBox(height: 6),
                   Text(
@@ -307,7 +265,7 @@ class _WatchlistItem extends StatelessWidget {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.titleSmall
-                        ?.copyWith(fontSize: 13, height: 1.35),
+                        ?.copyWith(fontSize: 14, height: 1.3),
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -321,7 +279,25 @@ class _WatchlistItem extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 4),
-                  SplitFlapLabel(value: scheduleLabel),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.event_outlined,
+                        size: 14,
+                        color: MusicoPalette.softInk,
+                      ),
+                      const SizedBox(width: 5),
+                      Expanded(
+                        child: Text(
+                          scheduleLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: MusicoPalette.softInk),
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -339,31 +315,15 @@ class _WatchlistItem extends StatelessWidget {
                 }
                 return;
               }
-              if (action == 'download-anime') {
-                await showConfiguredDownloadsDialog(
-                  context,
-                  appState: appState,
-                  category: MediaDownloadCategory.anime,
-                  initialQuery: title.title,
-                );
-              }
             },
             itemBuilder: (context) => [
               const PopupMenuItem(
                 value: 'remove',
                 child: Text('Remove from list'),
               ),
-              if (appState.mediaDownloadConfig
-                      ?.forCategory(MediaDownloadCategory.anime)
-                      .isNotEmpty ??
-                  false)
-                const PopupMenuItem(
-                  value: 'download-anime',
-                  child: Text('Download configured episodes'),
-                ),
             ],
             icon: const Icon(
-              Icons.more_horiz_rounded,
+              Icons.more_horiz_outlined,
               color: MusicoPalette.muted,
               size: 19,
             ),
@@ -427,11 +387,8 @@ class _EmptyWatchlist extends StatelessWidget {
               Text(
                 'Save something for later.',
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontFamily: 'Space Grotesk',
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                ),
+                style: Theme.of(context).textTheme.titleMedium
+                    ?.copyWith(fontSize: 20, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 5),
               Text(

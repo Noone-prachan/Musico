@@ -11,4 +11,4 @@ void UpdateSystemMediaControls(HWND window, const std::string& title,
                                bool is_playing);
 void ClearSystemMediaControls(HWND window);
 
-#endif  // RUNNER_SYSTEM_MEDIA_CONTROLS_H_
+#endif

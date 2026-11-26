@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/youtube_media.dart';
@@ -12,31 +13,53 @@ final class YouTubeSearchNotConfiguredException implements Exception {
 
   @override
   String toString() =>
-      'YouTube search is not configured for this build. '
+      'YouTube search is not configured for this platform. '
       'Set YOUTUBE_API_KEY when building Musico.';
 }
 
-/// Uses the bundled yt-dlp executable on Windows and InnerTube on other
-/// platforms, returning normalized [YouTubeSearchResult]s.
 class YouTubeSearchService {
-  YouTubeSearchService(this._client, {bool? isWindows})
-    : _isWindows = isWindows ?? Platform.isWindows;
+  YouTubeSearchService(this._client, {bool? isWindows, bool? isAndroid})
+    : _isWindows = isWindows ?? Platform.isWindows,
+      _isAndroid = isAndroid ?? Platform.isAndroid;
 
   final http.Client _client;
   final bool _isWindows;
+  final bool _isAndroid;
 
   static const _key = String.fromEnvironment('YOUTUBE_API_KEY');
   static const _endpoint = 'https://www.youtube.com/youtubei/v1/search';
+  static const _androidChannel = MethodChannel('musico/youtube_search');
 
   Future<List<YouTubeSearchResult>> search(String query) async {
     final trimmed = query.trim();
     if (trimmed.isEmpty) return const [];
     if (_isWindows) return _searchWithYtDlp(trimmed);
+    if (_isAndroid) return _searchWithAndroidYtDlp(trimmed);
     if (_key.isEmpty) {
       throw const YouTubeSearchNotConfiguredException();
     }
 
     return _searchWithInnerTube(trimmed);
+  }
+
+  Future<List<YouTubeSearchResult>> _searchWithAndroidYtDlp(
+    String query,
+  ) async {
+    try {
+      final output = await _androidChannel.invokeMethod<String>('search', {
+        'query': query,
+      });
+      if (output == null) {
+        throw const FormatException(
+          'Android yt-dlp returned an empty search response.',
+        );
+      }
+      return parseYtDlpSearchResults(output);
+    } on PlatformException catch (error) {
+      throw HttpException(
+        error.message ?? 'Android yt-dlp could not search YouTube.',
+      );
+    }
   }
 
   Future<List<YouTubeSearchResult>> _searchWithInnerTube(String query) async {
@@ -96,6 +119,9 @@ class YouTubeSearchService {
     }
 
     final process = await Process.start(executable, [
+      ...ytDlpRuntimeArguments(
+        applicationDirectory: File(Platform.resolvedExecutable).parent.path,
+      ),
       '--flat-playlist',
       '--dump-single-json',
       '--skip-download',

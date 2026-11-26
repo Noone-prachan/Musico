@@ -4,9 +4,83 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:musico/models/youtube_download.dart';
 import 'package:musico/models/youtube_media.dart';
+import 'package:musico/services/youtube_download_service.dart';
 import 'package:musico/services/yt_dlp_executable_resolver.dart';
 
 void main() {
+  group('parseYtDlpProgress', () {
+    test('parses progress output emitted by yt-dlp', () {
+      expect(
+        parseYtDlpProgress(
+          '[download]  42.5% of 8.00MiB at 2.00MiB/s ETA 00:02',
+        ),
+        0.425,
+      );
+      expect(parseYtDlpProgress('[download] 100.0% of 8.00MiB'), 1);
+    });
+
+    test('ignores status lines without a valid percentage', () {
+      expect(parseYtDlpProgress('[download] Destination: track.webm'), isNull);
+      expect(parseYtDlpProgress('[download] NaN%'), isNull);
+    });
+  });
+
+  test('parses and sorts downloadable MP4 qualities from yt-dlp metadata', () {
+    final qualities = YouTubeDownloadService.parseYtDlpQualities(
+      jsonEncode({
+        'formats': [
+          {
+            'format_id': '136',
+            'format_note': '720p',
+            'height': 720,
+            'ext': 'mp4',
+            'vcodec': 'avc1.4d401f',
+            'tbr': 1200,
+            'filesize': 20000000,
+          },
+          {
+            'format_id': '137',
+            'format_note': '1080p',
+            'height': 1080,
+            'ext': 'mp4',
+            'vcodec': 'avc1.640028',
+            'tbr': 2400,
+            'filesize_approx': 40000000,
+          },
+          {
+            'format_id': '248',
+            'format_note': '1080p',
+            'height': 1080,
+            'ext': 'webm',
+            'vcodec': 'vp9',
+            'tbr': 2600,
+          },
+          {'format_id': '140', 'height': null, 'ext': 'm4a', 'vcodec': 'none'},
+        ],
+      }),
+    );
+
+    expect(qualities.map((quality) => quality.label), ['1080p', '720p']);
+    expect(qualities.first.itag, 137);
+    expect(qualities.first.sizeBytes, 40000000);
+  });
+
+  test('Android MP4 selection prefers the chosen format with fallbacks', () {
+    expect(
+      YouTubeDownloadService.androidVideoFormatSelector(
+        height: 720,
+        formatId: 137,
+      ),
+      '137/bestvideo*[height<=720][ext=mp4]/'
+      'best[height<=720][ext=mp4]/best[ext=mp4]',
+    );
+    expect(
+      YouTubeDownloadService.androidVideoFormatSelector(height: 480),
+      'bestvideo*[height<=480][ext=mp4]/'
+      'best[height<=480][ext=mp4]/best[ext=mp4]',
+    );
+  });
+
   group('findYtDlpExecutable', () {
     late Directory temporaryDirectory;
 
@@ -56,6 +130,42 @@ void main() {
           userProfile: temporaryDirectory.path,
         ),
         fallback.path,
+      );
+    });
+  });
+
+  group('ytDlpRuntimeArguments', () {
+    late Directory temporaryDirectory;
+
+    setUp(() async {
+      temporaryDirectory = await Directory.systemTemp.createTemp(
+        'musico-ytdlp-runtime',
+      );
+    });
+
+    tearDown(() async {
+      if (await temporaryDirectory.exists()) {
+        await temporaryDirectory.delete(recursive: true);
+      }
+    });
+
+    test('uses the bundled Deno runtime when it is present', () async {
+      final deno = File(
+        '${temporaryDirectory.path}${Platform.pathSeparator}bin'
+        '${Platform.pathSeparator}deno.exe',
+      );
+      await deno.create(recursive: true);
+
+      expect(
+        ytDlpRuntimeArguments(applicationDirectory: temporaryDirectory.path),
+        ['--js-runtimes', 'deno:${deno.path}'],
+      );
+    });
+
+    test('does not pass a runtime option when Deno is not bundled', () {
+      expect(
+        ytDlpRuntimeArguments(applicationDirectory: temporaryDirectory.path),
+        isEmpty,
       );
     });
   });

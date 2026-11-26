@@ -1,0 +1,27 @@
+THIRD-PARTY NOTICES — Musico Android YouTube search
+
+yt-dlp-android (Free), version 2.0.2
+Copyright (c) 2026 LucQuebec
+Licensed under the MIT License. See YT-DLP-ANDROID-LICENSE.txt.
+Repository: https://github.com/ffmpegkit-maintained/yt-dlp-android
+
+yt-dlp
+Copyright (c) 2021-2026 yt-dlp contributors.
+Licensed under the Unlicense (public domain dedication).
+Repository: https://github.com/yt-dlp/yt-dlp
+
+Chaquopy
+Copyright (c) 2017-2026 Chaquo Ltd.
+Licensed under the MIT License.
+Repository: https://github.com/chaquo/chaquopy
+
+Python
+Copyright (c) 2001-2026 Python Software Foundation.
+Licensed under the PSF License (BSD-like, permissive).
+
+TERMS OF SERVICE NOTICE
+
+This library provides the technical capability to access media information
+from internet services. The developer integrating this library is responsible
+for ensuring that the application's use complies with third-party platform
+terms of service, applicable copyright law, and other relevant regulations.

@@ -1,10 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:musico/models/media_download.dart';
 import 'package:musico/models/spotify_playlist.dart';
 
 void main() {
   group('Spotify playlist metadata', () {
-    test('imports account-export tracks and matches an authorized link', () {
+    test('imports account-export track metadata', () {
       final playlist = SpotifyPlaylist.decodeExport('''
       {
         "playlists": [{
@@ -23,22 +22,10 @@ void main() {
       }
       ''').single;
       final track = playlist.tracks.single;
-      final link = MediaDownloadLink.fromJson(
-        {
-          'id': 'night-drive',
-          'title': 'Night Drive',
-          'artist': 'Sample Artist',
-          'url': 'https://files.example.org/night-drive.mp3',
-          'rights': 'permission',
-        },
-        category: MediaDownloadCategory.music,
-        location: 'music[1]',
-      );
 
       expect(playlist.name, 'Road songs');
       expect(track.album, 'After Hours');
       expect(track.spotifyUri, 'spotify:track:abc123');
-      expect(track.matchesDownload(link), isTrue);
       expect(
         SpotifyPlaylist.fromJson(playlist.toJson()).tracks.single.title,
         'Night Drive',

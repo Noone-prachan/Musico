@@ -1,7 +1,7 @@
 name: musico
 description: A native offline music player and anime release tracker.
 publish_to: 'none'
-version: 1.0.1+2
+version: 1.0.1+4014
 
 environment:
   sdk: ^3.14.0
@@ -21,7 +21,8 @@ dependencies:
   flutter_timezone: ^5.1.1
   http: ^1.6.0
   just_audio: ^0.10.6
-  just_audio_background: ^0.0.1-beta.17
+  just_audio_background:
+    path: 'packages\just_audio_background'
   just_audio_windows: ^0.2.3
   media_kit: ^1.2.6
   media_kit_libs_video: ^1.0.7
@@ -39,20 +40,19 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - config/media_downloads.json
     - assets/images/musico_mark.png
   fonts:
-    - family: Space Grotesk
+    - family: Manrope
       fonts:
-        - asset: assets/fonts/SpaceGrotesk-Light.ttf
+        - asset: assets/fonts/Manrope-Variable.ttf
           weight: 300
-        - asset: assets/fonts/SpaceGrotesk-Regular.ttf
+        - asset: assets/fonts/Manrope-Variable.ttf
           weight: 400
-        - asset: assets/fonts/SpaceGrotesk-Medium.ttf
+        - asset: assets/fonts/Manrope-Variable.ttf
           weight: 500
-        - asset: assets/fonts/SpaceGrotesk-SemiBold.ttf
+        - asset: assets/fonts/Manrope-Variable.ttf
           weight: 600
-        - asset: assets/fonts/SpaceGrotesk-Bold.ttf
+        - asset: assets/fonts/Manrope-Variable.ttf
           weight: 700
     - family: IBM Plex Mono
       fonts:

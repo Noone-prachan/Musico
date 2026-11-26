@@ -19,3 +19,12 @@ String? findYtDlpExecutable({
   }
   return null;
 }
+
+List<String> ytDlpRuntimeArguments({required String applicationDirectory}) {
+  final denoExecutable = File(
+    '$applicationDirectory${Platform.pathSeparator}bin'
+    '${Platform.pathSeparator}deno.exe',
+  );
+  if (!denoExecutable.existsSync()) return const [];
+  return ['--js-runtimes', 'deno:${denoExecutable.path}'];
+}

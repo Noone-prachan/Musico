@@ -1,7 +1,5 @@
 import 'dart:convert';
 
-import 'media_download.dart';
-
 class SpotifyPlaylistTrack {
   const SpotifyPlaylistTrack({
     required this.title,
@@ -14,17 +12,6 @@ class SpotifyPlaylistTrack {
   final String? artist;
   final String? album;
   final String? spotifyUri;
-
-  bool matchesDownload(MediaDownloadLink download) {
-    if (download.category != MediaDownloadCategory.music ||
-        SpotifyPlaylist._normalize(title) !=
-            SpotifyPlaylist._normalize(download.title)) {
-      return false;
-    }
-    return artist == null ||
-        SpotifyPlaylist._normalize(artist!) ==
-            SpotifyPlaylist._normalize(download.artist ?? '');
-  }
 
   factory SpotifyPlaylistTrack.fromJson(Map<String, dynamic> json) {
     final title = json['title'];
@@ -288,9 +275,6 @@ class SpotifyPlaylist {
     if (value is! String || value.trim().isEmpty) return null;
     return value.trim();
   }
-
-  static String _normalize(String value) =>
-      value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
 
   static String _stableHash(String value) {
     var hash = 0x811c9dc5;
