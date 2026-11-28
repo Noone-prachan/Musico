@@ -1,7 +1,7 @@
 name: musico
 description: A native offline music player and anime release tracker.
 publish_to: 'none'
-version: 1.0.1+4014
+version: 1.0.2+6015
 
 environment:
   sdk: ^3.14.0
