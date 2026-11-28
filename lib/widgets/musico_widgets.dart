@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 
 import '../models/media_title.dart';
@@ -415,6 +417,195 @@ class _AnimatedPressState extends State<AnimatedPress> {
           duration: const Duration(milliseconds: 140),
           curve: Curves.easeOutCubic,
           child: widget.child,
+        ),
+      ),
+    );
+  }
+}
+
+class HeroBannerItem {
+  const HeroBannerItem({
+    required this.title,
+    required this.onTap,
+    this.subtitle,
+    this.imageUrl,
+    this.buttonLabel = 'Watch Now',
+  });
+
+  final String title;
+  final String? subtitle;
+  final String? imageUrl;
+  final String buttonLabel;
+  final VoidCallback onTap;
+}
+
+class AutoHeroCarousel extends StatefulWidget {
+  const AutoHeroCarousel({
+    required this.items,
+    this.height = 230,
+    super.key,
+  });
+
+  final List<HeroBannerItem> items;
+  final double height;
+
+  @override
+  State<AutoHeroCarousel> createState() => _AutoHeroCarouselState();
+}
+
+class _AutoHeroCarouselState extends State<AutoHeroCarousel> {
+  late final PageController _controller = PageController();
+  Timer? _timer;
+  int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _startTimer();
+  }
+
+  @override
+  void didUpdateWidget(covariant AutoHeroCarousel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.items.length != widget.items.length) {
+      _index = 0;
+      _startTimer();
+    }
+  }
+
+  void _startTimer() {
+    _timer?.cancel();
+    if (widget.items.length <= 1) return;
+    _timer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted || !_controller.hasClients) return;
+      final next = (_index + 1) % widget.items.length;
+      _controller.animateToPage(
+        next,
+        duration: const Duration(milliseconds: 450),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.items.isEmpty) return const SizedBox.shrink();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: SizedBox(
+        height: widget.height,
+        child: Stack(
+          children: [
+            PageView.builder(
+              controller: _controller,
+              itemCount: widget.items.length,
+              onPageChanged: (value) => setState(() => _index = value),
+              itemBuilder: (context, index) {
+                final item = widget.items[index];
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (item.imageUrl != null && item.imageUrl!.isNotEmpty)
+                      Image.network(
+                        item.imageUrl!,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) =>
+                            Container(color: MusicoPalette.ink),
+                      )
+                    else
+                      Container(color: MusicoPalette.ink),
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.black.withValues(alpha: 0.15),
+                            Colors.black.withValues(alpha: 0.55),
+                            Colors.black.withValues(alpha: 0.92),
+                          ],
+                          stops: const [0.0, 0.45, 1.0],
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            item.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.headlineSmall
+                                ?.copyWith(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                  height: 1.15,
+                                ),
+                          ),
+                          if (item.subtitle != null &&
+                              item.subtitle!.isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              item.subtitle!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: Colors.white.withValues(alpha: 0.8),
+                                  ),
+                            ),
+                          ],
+                          const SizedBox(height: 14),
+                          FilledButton.icon(
+                            onPressed: item.onTap,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: Colors.white,
+                              foregroundColor: Colors.black,
+                            ),
+                            icon: const Icon(Icons.play_arrow_rounded, size: 20),
+                            label: Text(item.buttonLabel),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+            if (widget.items.length > 1)
+              Positioned(
+                right: 16,
+                bottom: 16,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (var i = 0; i < widget.items.length; i++)
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 220),
+                        margin: const EdgeInsets.symmetric(horizontal: 3),
+                        width: i == _index ? 18 : 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: i == _index
+                              ? Colors.white
+                              : Colors.white.withValues(alpha: 0.4),
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+          ],
         ),
       ),
     );

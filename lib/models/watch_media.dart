@@ -7,6 +7,7 @@ class WatchTitle {
     this.year,
     this.kind = '',
     this.posterUrl,
+    this.tmdbId,
   });
 
   final String imdbId;
@@ -15,6 +16,19 @@ class WatchTitle {
 
   final String kind;
   final String? posterUrl;
+
+  /// TMDB numeric ID – populated lazily via [TmdbService].
+  final int? tmdbId;
+
+  /// Returns a copy with the given [tmdbId] set.
+  WatchTitle withTmdbId(int id) => WatchTitle(
+        imdbId: imdbId,
+        title: title,
+        year: year,
+        kind: kind,
+        posterUrl: posterUrl,
+        tmdbId: id,
+      );
 
   bool get isSeries =>
       kind == 'tvSeries' || kind == 'tvMiniSeries' || kind == 'tvShort';

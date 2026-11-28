@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:material_ui/material_ui.dart';
@@ -7,14 +8,21 @@ import '../models/anime_stream.dart';
 import '../models/media_title.dart';
 import '../models/stream_watch_progress.dart';
 import '../models/watch_media.dart';
+import '../services/anime_provider.dart';
 import '../services/anime_stream_service.dart';
 import '../services/stream_watch_progress_service.dart';
+import '../services/streaming_catalog.dart';
+import '../services/tmdb_service.dart';
+import '../services/watch_provider.dart';
 import '../services/watch_service.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/musico_widgets.dart';
 import '../widgets/search_autocomplete_field.dart';
+import 'embed_player_page.dart';
 import 'stream_player_page.dart';
+
+bool streamingChildHandledPop = false;
 
 class StreamingScreen extends StatelessWidget {
   const StreamingScreen({
@@ -95,7 +103,8 @@ class _AnimeTabState extends State<AnimeTab> {
     'Dandadan',
   ];
 
-  final AnimeStreamService _service = AnimeStreamService();
+  final StreamingCatalog _catalog = StreamingCatalog.instance;
+  late AnimeProvider _service = _catalog.animeProvider;
   final StreamWatchProgressService _progressService =
       StreamWatchProgressService();
   final TextEditingController _searchController = TextEditingController();
@@ -115,12 +124,20 @@ class _AnimeTabState extends State<AnimeTab> {
   bool _loadingSeasons = false;
   String? _showError;
   String _mode = 'sub';
+  String _animeProvider = 'builtin';
+  List<String> _availableModes = const ['sub'];
   String? _openingEpisodeId;
   bool _autoPlayConsumed = false;
 
   @override
   void initState() {
     super.initState();
+    _catalog.addListener(_handleCatalogChange);
+    if (!_catalog.isInitialized) {
+      unawaited(_catalog.initialize());
+    } else {
+      _service = _catalog.animeProvider;
+    }
     unawaited(_loadContinueWatching());
     final seeded = Platform.environment['MUSICO_STREAM_QUERY']?.trim();
     if (seeded != null && seeded.isNotEmpty) {
@@ -129,6 +146,24 @@ class _AnimeTabState extends State<AnimeTab> {
         if (mounted) unawaited(_runSearch(seeded));
       });
     }
+  }
+
+  /// Switches catalog as soon as the user picks another installed source.
+  void _handleCatalogChange() {
+    final provider = _catalog.animeProvider;
+    if (!mounted || provider.id == _service.id) return;
+    setState(() {
+      _service = provider;
+      _results = const [];
+      _show = null;
+      _showError = null;
+      _searchError = null;
+      _episodes = const [];
+      _seasons = const [];
+      _availableModes = const ['sub'];
+      _mode = 'sub';
+    });
+    if (_lastQuery.isNotEmpty) unawaited(_runSearch(_lastQuery));
   }
 
   Future<void> _loadContinueWatching() async {
@@ -215,8 +250,8 @@ class _AnimeTabState extends State<AnimeTab> {
 
   @override
   void dispose() {
+    _catalog.removeListener(_handleCatalogChange);
     _searchController.dispose();
-    _service.dispose();
     super.dispose();
   }
 
@@ -300,6 +335,9 @@ class _AnimeTabState extends State<AnimeTab> {
         _episodes = episodes;
         _loadingShow = false;
       });
+      if (episodes.isNotEmpty) {
+        unawaited(_loadAvailableModes(show, episodes.first));
+      }
       if (!_autoPlayConsumed &&
           Platform.environment['MUSICO_STREAM_AUTOPLAY'] == '1' &&
           episodes.isNotEmpty) {
@@ -320,6 +358,24 @@ class _AnimeTabState extends State<AnimeTab> {
         _showError = 'The episode list could not be loaded. ($error)';
         _loadingShow = false;
       });
+    }
+  }
+
+  Future<void> _loadAvailableModes(
+    AnimeSearchResult show,
+    AnimeEpisode episode,
+  ) async {
+    try {
+      final modes = await _service.availableModes(episode);
+      if (!mounted || _show?.slug != show.slug || modes.isEmpty) return;
+      setState(() {
+        _availableModes = modes;
+        if (!modes.contains(_mode)) {
+          _mode = modes.first;
+        }
+      });
+    } on Object {
+      // Keep default ['sub'] if mode probe fails.
     }
   }
 
@@ -360,6 +416,26 @@ class _AnimeTabState extends State<AnimeTab> {
     }
   }
 
+  Future<int?> _lookupMalId(String title) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+    try {
+      final req = await client.postUrl(Uri.parse('https://graphql.anilist.co'));
+      req.headers.contentType = ContentType.json;
+      req.write(jsonEncode({
+        'query': r'query ($s: String) { Media(search: $s, type: ANIME) { idMal } }',
+        'variables': {'s': title},
+      }));
+      final res = await req.close().timeout(const Duration(seconds: 5));
+      final body = await res.transform(utf8.decoder).join();
+      final decoded = jsonDecode(body) as Map<String, dynamic>;
+      return (decoded['data']?['Media']?['idMal'] as num?)?.toInt();
+    } on Object {
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   Future<void> _openEpisode(
     AnimeEpisode episode, {
     int resumePositionMs = 0,
@@ -375,6 +451,25 @@ class _AnimeTabState extends State<AnimeTab> {
         '$error\n$stackTrace',
       );
     }
+    if (_animeProvider == 'vidlink') {
+      final malId = await _lookupMalId(show.title);
+      if (!mounted) return;
+      if (malId != null) {
+        setState(() => _openingEpisodeId = null);
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            builder: (_) => EmbedPlayerPage(
+              title: show.title,
+              subtitle: 'Episode ${episode.number} · ${_mode.toUpperCase()}',
+              embedUrl:
+                  'https://vidlink.pro/anime/$malId/${episode.number}/$_mode?fallback=true',
+            ),
+          ),
+        );
+        await _loadContinueWatching();
+        return;
+      }
+    }
     if (!mounted) return;
     setState(() => _openingEpisodeId = null);
     final initialIndex = _episodes.indexOf(episode);
@@ -383,6 +478,7 @@ class _AnimeTabState extends State<AnimeTab> {
         builder: (_) => StreamPlayerPage(
           title: show.title,
           badge: _mode.toUpperCase(),
+          preferredAudioLanguage: _mode == 'dub' ? 'en' : 'ja',
           initialIndex: initialIndex,
           category: StreamWatchCategory.anime,
           catalogId: show.slug,
@@ -407,17 +503,38 @@ class _AnimeTabState extends State<AnimeTab> {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width > 900;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(wide ? 32 : 18, 18, wide ? 32 : 18, 0),
-          child: _buildHeader(context, wide),
-        ),
-        Expanded(
-          child: _show == null ? _buildResults(context) : _buildShow(context),
-        ),
-      ],
+    return PopScope(
+      canPop: _show == null && _results.isEmpty && _lastQuery.isEmpty,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_show != null) {
+          streamingChildHandledPop = true;
+          setState(() {
+            _show = null;
+            _showError = null;
+          });
+        } else if (_results.isNotEmpty || _lastQuery.isNotEmpty) {
+          streamingChildHandledPop = true;
+          setState(() {
+            _results = const [];
+            _lastQuery = '';
+            _searchError = null;
+            _searchController.clear();
+          });
+        }
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(wide ? 32 : 18, 18, wide ? 32 : 18, 0),
+            child: _buildHeader(context, wide),
+          ),
+          Expanded(
+            child: _show == null ? _buildResults(context) : _buildShow(context),
+          ),
+        ],
+      ),
     );
   }
 
@@ -448,7 +565,7 @@ class _AnimeTabState extends State<AnimeTab> {
           style: Theme.of(context).textTheme.displayLarge
               ?.copyWith(fontSize: wide ? 36 : 29),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 10),
         Row(
           children: [
             Expanded(
@@ -717,11 +834,53 @@ class _AnimeTabState extends State<AnimeTab> {
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
+              Container(
+                height: 32,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: MusicoPalette.glassStrong),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: _animeProvider,
+                    isDense: true,
+                    style: Theme.of(context).textTheme.bodySmall,
+                    iconSize: 18,
+                    borderRadius: BorderRadius.circular(12),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'builtin',
+                        child: Text('Built-in'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'vidlink',
+                        child: Text('VidLink'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() => _animeProvider = value);
+                      }
+                    },
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
               SegmentedButton<String>(
                 showSelectedIcon: false,
-                segments: const [
-                  ButtonSegment(value: 'sub', label: Text('Sub')),
-                  ButtonSegment(value: 'dub', label: Text('Dub')),
+                segments: [
+                  for (final mode in _availableModes)
+                    ButtonSegment(
+                      value: mode,
+                      label: Text(
+                        mode == 'sub'
+                            ? 'Sub'
+                            : mode == 'dub'
+                            ? 'Dub (EN)'
+                            : mode.toUpperCase(),
+                      ),
+                    ),
                 ],
                 selected: {_mode},
                 onSelectionChanged: (selected) {
@@ -826,6 +985,98 @@ class _AnimeTabState extends State<AnimeTab> {
   }
 }
 
+class _AnimeHeroBanner extends StatelessWidget {
+  const _AnimeHeroBanner({
+    required this.media,
+    required this.onWatchNow,
+  });
+
+  final MediaTitle media;
+  final VoidCallback onWatchNow;
+
+  @override
+  Widget build(BuildContext context) {
+    final imageUrl = media.imageUrl;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: SizedBox(
+        height: 250,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (imageUrl != null && imageUrl.isNotEmpty)
+              Image.network(
+                imageUrl,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => Container(color: MusicoPalette.ink),
+              )
+            else
+              Container(color: MusicoPalette.ink),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: 0.15),
+                    Colors.black.withValues(alpha: 0.55),
+                    Colors.black.withValues(alpha: 0.92),
+                  ],
+                  stops: const [0.0, 0.5, 1.0],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.end,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    media.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          height: 1.15,
+                        ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    [
+                      if (media.format.isNotEmpty) media.format,
+                      if (media.episodes != null)
+                        '${media.episodes} Episodes',
+                      if (media.genres.isNotEmpty)
+                        media.genres.take(3).join(' · '),
+                    ].join('  ·  '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Colors.white.withValues(alpha: 0.8),
+                        ),
+                  ),
+                  const SizedBox(height: 14),
+                  FilledButton.icon(
+                    onPressed: onWatchNow,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: Colors.black,
+                    ),
+                    icon: const Icon(Icons.play_arrow_rounded, size: 20),
+                    label: const Text('Watch Now'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _AnimeDiscovery extends StatelessWidget {
   const _AnimeDiscovery({
     required this.appState,
@@ -858,8 +1109,28 @@ class _AnimeDiscovery extends StatelessWidget {
       onRefresh: () => appState.refreshAnime(),
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(18, 22, 18, 30),
+        padding: const EdgeInsets.fromLTRB(18, 16, 18, 30),
         children: [
+          if (currentSeason.isNotEmpty) ...[
+            AutoHeroCarousel(
+              height: 250,
+              items: [
+                for (final media in currentSeason.take(5))
+                  HeroBannerItem(
+                    title: media.title,
+                    subtitle: [
+                      if (media.format.isNotEmpty) media.format,
+                      if (media.episodes != null) '${media.episodes} Episodes',
+                      if (media.genres.isNotEmpty)
+                        media.genres.take(3).join(' · '),
+                    ].join('  ·  '),
+                    imageUrl: media.imageUrl,
+                    onTap: () => onOpen(media),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 20),
+          ],
           _ContinueWatchingRail(
             entries: continueWatching,
             isLoading: isLoadingContinueWatching,
@@ -1022,7 +1293,7 @@ class _ContinueWatchingRail extends StatelessWidget {
                     label:
                         'Continue ${entry.title}, $detail, '
                         '${(entry.playbackProgress * 100).round()} percent watched',
-                    child: InkWell(
+                    child: InkWell(mouseCursor: SystemMouseCursors.click,
                       onTap: () => onResume(entry),
                       borderRadius: BorderRadius.circular(12),
                       child: Column(
@@ -1088,7 +1359,7 @@ class _ResultCard extends StatelessWidget {
       if (result.subtitleLine.isNotEmpty) result.subtitleLine,
       if (result.episodeCount != null) '${result.episodeCount} eps',
     ].join(' · ');
-    return InkWell(
+    return InkWell(mouseCursor: SystemMouseCursors.click,
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
       child: Column(
@@ -1193,7 +1464,7 @@ class _AnimeTitleSection extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    InkWell(
+                    InkWell(mouseCursor: SystemMouseCursors.click,
                       onTap: () => onOpen(media),
                       borderRadius: BorderRadius.circular(12),
                       child: Column(
@@ -1206,11 +1477,14 @@ class _AnimeTitleSection extends StatelessWidget {
                             height: 190,
                           ),
                           const SizedBox(height: 8),
-                          Text(
-                            media.title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.titleSmall,
+                          Tooltip(
+                            message: media.title,
+                            child: Text(
+                              media.title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
                           ),
                           const SizedBox(height: 3),
                           Text(
@@ -1281,7 +1555,7 @@ List<WatchTitle> _fallbackWatchTitles(
 }
 
 Future<List<WatchTitle>> _loadWatchSuggestions(
-  WatchService service,
+  WatchProvider service,
   List<String> suggestions, {
   required bool series,
 }) async {
@@ -1295,6 +1569,94 @@ Future<List<WatchTitle>> _loadWatchSuggestions(
     }
   }
   return byId.values.toList();
+}
+
+class _WatchHeroBanner extends StatelessWidget {
+  const _WatchHeroBanner({
+    required this.title,
+    required this.onWatchNow,
+  });
+
+  final WatchTitle title;
+  final VoidCallback onWatchNow;
+
+  @override
+  Widget build(BuildContext context) {
+    final imageUrl = title.posterUrl;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: SizedBox(
+        height: 230,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (imageUrl != null && imageUrl.isNotEmpty)
+              Image.network(
+                imageUrl,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => Container(color: MusicoPalette.ink),
+              )
+            else
+              Container(color: MusicoPalette.ink),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: 0.15),
+                    Colors.black.withValues(alpha: 0.55),
+                    Colors.black.withValues(alpha: 0.92),
+                  ],
+                  stops: const [0.0, 0.45, 1.0],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.end,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          height: 1.15,
+                        ),
+                  ),
+                  if (title.subtitleLine.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      title.subtitleLine,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Colors.white.withValues(alpha: 0.8),
+                          ),
+                    ),
+                  ],
+                  const SizedBox(height: 14),
+                  FilledButton.icon(
+                    onPressed: onWatchNow,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: Colors.black,
+                    ),
+                    icon: const Icon(Icons.play_arrow_rounded, size: 20),
+                    label: const Text('Watch Now'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _WatchTitleRail extends StatelessWidget {
@@ -1332,7 +1694,7 @@ class _WatchTitleRail extends StatelessWidget {
                 final item = titles[index];
                 return SizedBox(
                   width: 142,
-                  child: InkWell(
+                  child: InkWell(mouseCursor: SystemMouseCursors.click,
                     onTap: () => onOpen(item),
                     borderRadius: BorderRadius.circular(12),
                     child: Column(
@@ -1433,7 +1795,7 @@ class _SeasonPremiereRail extends StatelessWidget {
                 final airdate = DateTime.parse(premiere.episode.airdate!);
                 return SizedBox(
                   width: 142,
-                  child: InkWell(
+                  child: InkWell(mouseCursor: SystemMouseCursors.click,
                     onTap: () => onOpen(premiere.show),
                     borderRadius: BorderRadius.circular(12),
                     child: Column(
@@ -1523,7 +1885,11 @@ class ImdbTab extends StatefulWidget {
 }
 
 class _ImdbTabState extends State<ImdbTab> {
-  final WatchService _service = WatchService();
+  final StreamingCatalog _catalog = StreamingCatalog.instance;
+  final WatchService _catalogService = WatchService();
+  late WatchProvider _service = _catalog.watchProviderFor(
+    series: widget.series,
+  );
   final StreamWatchProgressService _progressService =
       StreamWatchProgressService();
   final TextEditingController _searchController = TextEditingController();
@@ -1542,6 +1908,7 @@ class _ImdbTabState extends State<ImdbTab> {
   String? _titleError;
   int? _season;
   String? _openingId;
+  String _embedProvider = 'auto';
   bool _autoPlayConsumed = false;
   List<WatchTitle> _featuredTitles = const [];
   bool _loadingFeatured = false;
@@ -1563,6 +1930,12 @@ class _ImdbTabState extends State<ImdbTab> {
   @override
   void initState() {
     super.initState();
+    _catalog.addListener(_handleCatalogChange);
+    if (!_catalog.isInitialized) {
+      unawaited(_catalog.initialize());
+    } else {
+      _service = _catalog.watchProviderFor(series: widget.series);
+    }
     unawaited(_loadContinueWatching());
     _featuredTitles = _fallbackWatchTitles(
       widget.series ? _tvSuggestions : _movieSuggestions,
@@ -1584,6 +1957,22 @@ class _ImdbTabState extends State<ImdbTab> {
     } else {
       unawaited(_loadFeatured());
     }
+  }
+
+  /// Switches catalog as soon as the user picks another installed source.
+  void _handleCatalogChange() {
+    final provider = _catalog.watchProviderFor(series: widget.series);
+    if (!mounted || provider.id == _service.id) return;
+    setState(() {
+      _service = provider;
+      _results = const [];
+      _selected = null;
+      _episodes = const [];
+      _season = null;
+      _error = null;
+      _titleError = null;
+    });
+    if (_lastQuery.isNotEmpty) unawaited(_runSearch(_lastQuery));
   }
 
   Future<void> _loadContinueWatching() async {
@@ -1694,8 +2083,9 @@ class _ImdbTabState extends State<ImdbTab> {
 
   @override
   void dispose() {
+    _catalog.removeListener(_handleCatalogChange);
     _searchController.dispose();
-    _service.dispose();
+    _catalogService.dispose();
     super.dispose();
   }
 
@@ -1742,7 +2132,7 @@ class _ImdbTabState extends State<ImdbTab> {
       _premiereError = null;
     });
     try {
-      final premieres = await _service.upcomingSeasonPremieres();
+      final premieres = await _catalogService.upcomingSeasonPremieres();
       if (!mounted) return;
       setState(() => _seasonPremieres = premieres);
     } on WatchException catch (error, stackTrace) {
@@ -1839,6 +2229,34 @@ class _ImdbTabState extends State<ImdbTab> {
     }
   }
 
+  Future<String> _pickFastestEmbedUrl(List<String> urls) async {
+    final completer = Completer<String>();
+    var remaining = urls.length;
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+    for (final url in urls) {
+      unawaited(() async {
+        try {
+          final req = await client.headUrl(Uri.parse(url));
+          final res = await req.close().timeout(const Duration(seconds: 4));
+          await res.drain<void>();
+          if (res.statusCode >= 200 && res.statusCode < 400 && !completer.isCompleted) {
+            completer.complete(url);
+          }
+        } on Object {
+          // Ignore failed/timed-out probe.
+        } finally {
+          remaining--;
+          if (remaining == 0 && !completer.isCompleted) {
+            completer.complete(urls.first);
+          }
+        }
+      }());
+    }
+    final winner = await completer.future;
+    client.close(force: true);
+    return winner;
+  }
+
   Future<void> _pauseMusic() async {
     try {
       await widget.appState.player.pause();
@@ -1850,9 +2268,45 @@ class _ImdbTabState extends State<ImdbTab> {
     }
   }
 
-  Future<void> _playMovie(WatchTitle movie, {int initialPositionMs = 0}) async {
+  Future<void> _playMovie(
+    WatchTitle movie, {
+    int initialPositionMs = 0,
+    bool skipEmbed = false,
+  }) async {
     await _pauseMusic();
     if (!mounted) return;
+    if (!skipEmbed &&
+        (Platform.isAndroid || Platform.isIOS || Platform.isWindows)) {
+      final tmdbId =
+          movie.tmdbId ??
+          await TmdbService().imdbToTmdbId(movie.imdbId, isMovie: true);
+      if (!mounted) return;
+      if (tmdbId != null) {
+        final candidates = [
+          'https://vidlink.pro/movie/$tmdbId',
+          'https://vidcore.org/embed/movie/$tmdbId?autoplay=true',
+          'https://peachify.net/embed/movie/$tmdbId',
+        ];
+        final embedUrl = switch (_embedProvider) {
+          'vidlink' => candidates[0],
+          'vidcore' => candidates[1],
+          'peachify' => candidates[2],
+          _ => await _pickFastestEmbedUrl(candidates),
+        };
+        if (!mounted) return;
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            builder: (_) => EmbedPlayerPage(
+              title: movie.title,
+              subtitle: movie.typeLabel,
+              embedUrl: embedUrl,
+            ),
+          ),
+        );
+        await _loadContinueWatching();
+        return;
+      }
+    }
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => StreamPlayerPage(
@@ -1881,6 +2335,7 @@ class _ImdbTabState extends State<ImdbTab> {
     WatchTitle show,
     WatchEpisode episode, {
     int resumePositionMs = 0,
+    bool skipEmbed = false,
   }) async {
     final list = _seasonEpisodes;
     final index = list.indexWhere(
@@ -1889,6 +2344,39 @@ class _ImdbTabState extends State<ImdbTab> {
     );
     await _pauseMusic();
     if (!mounted) return;
+    if (!skipEmbed &&
+        (Platform.isAndroid || Platform.isIOS || Platform.isWindows)) {
+      final tmdbId =
+          show.tmdbId ??
+          await TmdbService().imdbToTmdbId(show.imdbId, isMovie: false);
+      if (!mounted) return;
+      if (tmdbId != null) {
+        final candidates = [
+          'https://vidlink.pro/tv/$tmdbId/${episode.season}/${episode.number}',
+          'https://vidcore.org/embed/tv/$tmdbId/${episode.season}/${episode.number}?autoplay=true',
+          'https://peachify.net/embed/tv/$tmdbId/${episode.season}/${episode.number}',
+        ];
+        final embedUrl = switch (_embedProvider) {
+          'vidlink' => candidates[0],
+          'vidcore' => candidates[1],
+          'peachify' => candidates[2],
+          _ => await _pickFastestEmbedUrl(candidates),
+        };
+        if (!mounted) return;
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            builder: (_) => EmbedPlayerPage(
+              title: show.title,
+              subtitle: 'S${episode.season} · E${episode.number}',
+              embedUrl: embedUrl,
+            ),
+          ),
+        );
+        if (mounted) setState(() => _openingId = null);
+        await _loadContinueWatching();
+        return;
+      }
+    }
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => StreamPlayerPage(
@@ -1913,6 +2401,7 @@ class _ImdbTabState extends State<ImdbTab> {
         ),
       ),
     );
+    if (mounted) setState(() => _openingId = null);
     await _loadContinueWatching();
   }
 
@@ -1953,19 +2442,39 @@ class _ImdbTabState extends State<ImdbTab> {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width > 900;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(wide ? 32 : 18, 18, wide ? 32 : 18, 0),
-          child: _buildHeader(context, wide),
-        ),
-        Expanded(
-          child: _selected == null
-              ? _buildResults(context)
-              : _buildDetail(context),
-        ),
-      ],
+    return PopScope(
+      canPop: _selected == null && _results.isEmpty && _lastQuery.isEmpty,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        FocusManager.instance.primaryFocus?.unfocus();
+        if (_selected != null) {
+          streamingChildHandledPop = true;
+          setState(() {
+            _selected = null;
+          });
+        } else if (_results.isNotEmpty || _lastQuery.isNotEmpty) {
+          streamingChildHandledPop = true;
+          setState(() {
+            _results = const [];
+            _lastQuery = '';
+            _searchController.clear();
+          });
+        }
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(wide ? 32 : 18, 18, wide ? 32 : 18, 0),
+            child: _buildHeader(context, wide),
+          ),
+          Expanded(
+            child: _selected == null
+                ? _buildResults(context)
+                : _buildDetail(context),
+          ),
+        ],
+      ),
     );
   }
 
@@ -2002,7 +2511,8 @@ class _ImdbTabState extends State<ImdbTab> {
           style: Theme.of(context).textTheme.displayLarge
               ?.copyWith(fontSize: wide ? 36 : 29),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 10),
+        const SizedBox(height: 10),
         Row(
           children: [
             Expanded(
@@ -2079,8 +2589,23 @@ class _ImdbTabState extends State<ImdbTab> {
     if (_results.isEmpty) {
       final suggestions = widget.series ? _tvSuggestions : _movieSuggestions;
       return ListView(
-        padding: const EdgeInsets.fromLTRB(18, 26, 18, 30),
+        padding: const EdgeInsets.fromLTRB(18, 20, 18, 30),
         children: [
+          if (_featuredTitles.isNotEmpty) ...[
+            AutoHeroCarousel(
+              height: 230,
+              items: [
+                for (final title in _featuredTitles.take(5))
+                  HeroBannerItem(
+                    title: title.title,
+                    subtitle: title.subtitleLine,
+                    imageUrl: title.posterUrl,
+                    onTap: () => unawaited(_openTitle(title)),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 22),
+          ],
           _ContinueWatchingRail(
             entries: _continueWatching,
             isLoading: _loadingContinueWatching,
@@ -2178,9 +2703,10 @@ class _ImdbTabState extends State<ImdbTab> {
 
   Widget _buildDetail(BuildContext context) {
     final title = _selected!;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
           child: Container(
@@ -2193,12 +2719,62 @@ class _ImdbTabState extends State<ImdbTab> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                PosterArtwork(
-                  imageUrl: title.posterUrl,
-                  title: title.title,
-                  width: 92,
-                  height: 128,
-                  rounded: 12,
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    PosterArtwork(
+                      imageUrl: title.posterUrl,
+                      title: title.title,
+                      width: 96,
+                      height: 134,
+                      rounded: 12,
+                    ),
+                    const SizedBox(height: 8),
+                    Builder(
+                      builder: (context) {
+                        final watchMedia = MediaTitle(
+                          id: title.tmdbId ?? title.imdbId.hashCode,
+                          title: title.title,
+                          status: 'FINISHED',
+                          season: null,
+                          format: title.isSeries ? 'TV' : 'MOVIE',
+                          seasonYear: title.year,
+                          imageUrl: title.posterUrl,
+                          genres: const [],
+                          startDate: null,
+                          episodes: null,
+                          airings: const [],
+                        );
+                        final isSaved = widget.appState.watchlist.any(
+                          (saved) => saved.id == watchMedia.id,
+                        );
+                        return SizedBox(
+                          width: 96,
+                          child: OutlinedButton.icon(
+                            onPressed: () => unawaited(
+                              isSaved
+                                  ? widget.appState.removeFromWatchlist(watchMedia)
+                                  : widget.appState.addToWatchlist(watchMedia),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 6),
+                              minimumSize: const Size(0, 34),
+                            ),
+                            icon: Icon(
+                              isSaved
+                                  ? Icons.bookmark_rounded
+                                  : Icons.bookmark_add_outlined,
+                              size: 16,
+                            ),
+                            label: Text(
+                              isSaved ? 'Saved' : 'Watchlist',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -2219,11 +2795,14 @@ class _ImdbTabState extends State<ImdbTab> {
                         label: const Text('Back to search'),
                       ),
                       const SizedBox(height: 2),
-                      Text(
-                        title.title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleLarge,
+                      Tooltip(
+                        message: title.title,
+                        child: Text(
+                          title.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
                       ),
                       const SizedBox(height: 4),
                       Text(
@@ -2235,18 +2814,70 @@ class _ImdbTabState extends State<ImdbTab> {
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                       const SizedBox(height: 10),
-                      if (title.isMovie)
-                        FilledButton.icon(
-                          onPressed: () => _playMovie(title),
-                          icon: const Icon(Icons.play_arrow_rounded, size: 20),
-                          label: const Text('Play movie'),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          if (title.isMovie)
+                            FilledButton.icon(
+                              onPressed: () => _playMovie(title),
+                              icon: const Icon(Icons.play_arrow_rounded, size: 20),
+                              label: const Text('Play movie'),
+                            ),
+                          if (title.isMovie) const SizedBox(width: 8),
+                          Container(
+                            height: 32,
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: MusicoPalette.glassStrong),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                value: _embedProvider,
+                                isDense: true,
+                                style: Theme.of(context).textTheme.bodySmall,
+                                iconSize: 18,
+                                borderRadius: BorderRadius.circular(12),
+                                items: const [
+                                  DropdownMenuItem(
+                                    value: 'auto',
+                                    child: Text('Auto'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: 'vidlink',
+                                    child: Text('VidLink'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: 'vidcore',
+                                    child: Text('VidCore'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: 'peachify',
+                                    child: Text('Peachify'),
+                                  ),
+                                ],
+                                onChanged: (value) {
+                                  if (value != null) {
+                                    setState(() => _embedProvider = value);
+                                  }
+                                },
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (!title.isMovie && _loadingTitle)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 8),
+                          child: Text('Loading episodes…'),
                         )
-                      else if (_loadingTitle)
-                        const Text('Loading episodes…')
-                      else if (_titleError != null)
-                        Text(
-                          _titleError!,
-                          style: Theme.of(context).textTheme.bodySmall,
+                      else if (!title.isMovie && _titleError != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(
+                            _titleError!,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
                         ),
                     ],
                   ),
@@ -2277,21 +2908,50 @@ class _ImdbTabState extends State<ImdbTab> {
             ),
           ),
         ],
-        Expanded(child: _buildEpisodes(context, title)),
+        _buildEpisodes(context, title),
       ],
+    ),
     );
   }
 
   Widget _buildEpisodes(BuildContext context, WatchTitle title) {
     if (title.isMovie) {
-      return ListView(
-        padding: const EdgeInsets.fromLTRB(18, 18, 18, 26),
-        children: [
-          Text(
-            'Streams instantly in the built-in player — no download step.',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(height: 1.5),
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(18, 16, 18, 26),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: MusicoPalette.surface,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: MusicoPalette.glassStrong),
           ),
-        ],
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Details', style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 16,
+                runSpacing: 8,
+                children: [
+                  if (title.year != null)
+                    Text(
+                      'Released: ${title.year}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  Text(
+                    'Type: ${title.typeLabel}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  Text(
+                    'Playback: Built-in embed player (Auto / VidLink / VidCore / Peachify)',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       );
     }
     if (_loadingTitle) {
@@ -2304,6 +2964,8 @@ class _ImdbTabState extends State<ImdbTab> {
     }
     final list = _seasonEpisodes;
     return ListView.separated(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(18, 6, 18, 26),
       itemCount: list.length,
       separatorBuilder: (_, _) => const Divider(height: 1, indent: 54),
@@ -2473,7 +3135,7 @@ class _WatchResultCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    return InkWell(mouseCursor: SystemMouseCursors.click,
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
       child: Column(

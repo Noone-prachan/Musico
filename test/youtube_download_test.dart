@@ -63,6 +63,7 @@ void main() {
     expect(qualities.map((quality) => quality.label), ['1080p', '720p']);
     expect(qualities.first.itag, 137);
     expect(qualities.first.sizeBytes, 40000000);
+    expect(qualities.every((quality) => quality.container == 'mp4'), isTrue);
   });
 
   test('Android MP4 selection prefers the chosen format with fallbacks', () {
@@ -71,13 +72,18 @@ void main() {
         height: 720,
         formatId: 137,
       ),
-      '137/bestvideo*[height<=720][ext=mp4]/'
-      'best[height<=720][ext=mp4]/best[ext=mp4]',
+      '137+bestaudio[ext=m4a]/137+bestaudio/137/'
+      'bestvideo*[height<=720][ext=mp4]+bestaudio[ext=m4a]/'
+      'bestvideo*[height<=720]+bestaudio/'
+      'best[height<=720][ext=mp4]/best[height<=720]/'
+      'best[ext=mp4]/best',
     );
     expect(
       YouTubeDownloadService.androidVideoFormatSelector(height: 480),
-      'bestvideo*[height<=480][ext=mp4]/'
-      'best[height<=480][ext=mp4]/best[ext=mp4]',
+      'bestvideo*[height<=480][ext=mp4]+bestaudio[ext=m4a]/'
+      'bestvideo*[height<=480]+bestaudio/'
+      'best[height<=480][ext=mp4]/best[height<=480]/'
+      'best[ext=mp4]/best',
     );
   });
 

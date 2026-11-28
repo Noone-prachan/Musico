@@ -6,9 +6,11 @@ list(APPEND FLUTTER_PLUGIN_LIST
   connectivity_plus
   ffmpeg_kit_flutter_new_audio
   flutter_timezone
+  fullscreen_window
   just_audio_windows
   media_kit_libs_windows_video
   media_kit_video
+  webview_win_floating
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST

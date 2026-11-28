@@ -5,12 +5,32 @@ import 'package:http/http.dart' as http;
 
 import '../models/anime_stream.dart';
 import '../models/watch_media.dart';
+import 'tmdb_service.dart';
+import 'watch_provider.dart';
 
-class WatchService {
+class WatchService implements WatchProvider {
   WatchService({
     http.Client? client,
     this.timeout = const Duration(seconds: 25),
   }) : _client = client ?? http.Client();
+
+  @override
+  String get id => 'vixsrc';
+
+  @override
+  String get name => 'vixsrc';
+
+  @override
+  String get description => 'Movies and TV shows, multi-language audio';
+
+  @override
+  bool get isExtension => false;
+
+  @override
+  bool get supportsSeries => true;
+
+  @override
+  bool get supportsMovies => true;
 
   static const String userAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -22,10 +42,21 @@ class WatchService {
 
   final http.Client _client;
   final Duration timeout;
+  final TmdbService _tmdb = TmdbService();
 
   Future<List<WatchTitle>> search(String query, {required bool series}) async {
     final cleaned = query.trim();
     if (cleaned.isEmpty) return const [];
+    try {
+      final tmdbResults = await _tmdb.search(cleaned, series: series);
+      if (tmdbResults.isNotEmpty) return tmdbResults;
+    } on Object catch (error, stackTrace) {
+      developer.log(
+        'TMDB search failed; falling back to TVMaze/IMDb.',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
     if (series) {
       try {
         final body = await _get(
@@ -47,8 +78,23 @@ class WatchService {
   }
 
   Future<List<WatchEpisode>> episodes(WatchTitle show) async {
-    final id = show.imdbId;
-    if (!RegExp(r'^tt\d+$').hasMatch(id)) return const [];
+    var id = show.imdbId;
+    if (!RegExp(r'^tt\d+$').hasMatch(id) && show.tmdbId != null) {
+      id = await _tmdb.tmdbToImdbId(show.tmdbId!, isMovie: false) ?? id;
+    }
+    if (!RegExp(r'^tt\d+$').hasMatch(id)) {
+      try {
+        final search = await _get(
+          '$_tvmaze/singlesearch/shows?q=${Uri.encodeComponent(show.title)}',
+        );
+        final tvmazeId = _tvmazeId(search);
+        if (tvmazeId == null) return const [];
+        final body = await _get('$_tvmaze/shows/$tvmazeId/episodes');
+        return parseTvmazeEpisodes(body);
+      } on Object {
+        return const [];
+      }
+    }
     try {
       final lookup = await _get('$_tvmaze/lookup/shows?imdb=$id');
       var tvmazeId = _tvmazeId(lookup);
@@ -106,16 +152,39 @@ class WatchService {
     ];
   }
 
-  Future<AnimeStreamSource> resolveMovie(WatchTitle movie) {
-    return _resolve('/api/movie/${movie.imdbId}');
+  Future<AnimeStreamSource> resolveMovie(WatchTitle movie) async {
+    var id = movie.imdbId;
+    if (!id.startsWith('tt') && movie.tmdbId != null) {
+      id = await _tmdb.tmdbToImdbId(movie.tmdbId!, isMovie: true) ?? id;
+    }
+    return _resolve('/api/movie/$id');
   }
 
   Future<AnimeStreamSource> resolveEpisode(
     WatchTitle show,
     WatchEpisode episode,
-  ) {
+  ) async {
+    if (episode.airdate != null && episode.airdate!.isNotEmpty) {
+      final airDate = DateTime.tryParse(episode.airdate!);
+      final now = DateTime.now();
+      if (airDate != null && airDate.isAfter(now)) {
+        final diff = airDate.difference(now);
+        final countdown = diff.inDays > 0
+            ? '${diff.inDays}d ${diff.inHours % 24}h'
+            : diff.inHours > 0
+            ? '${diff.inHours}h ${diff.inMinutes % 60}m'
+            : '${diff.inMinutes.clamp(1, 59)}m';
+        throw WatchException(
+          'Episode ${episode.number} has not aired yet — airs in $countdown (${episode.airdate}).',
+        );
+      }
+    }
+    var id = show.imdbId;
+    if (!id.startsWith('tt') && show.tmdbId != null) {
+      id = await _tmdb.tmdbToImdbId(show.tmdbId!, isMovie: false) ?? id;
+    }
     return _resolve(
-      '/api/tv/${show.imdbId}/${episode.season}/${episode.number}',
+      '/api/tv/$id/${episode.season}/${episode.number}',
     );
   }
 
@@ -272,6 +341,10 @@ class WatchService {
       if (season is! int || number is! int) continue;
       final name = item['name'];
       final airdate = item['airdate'];
+      if (airdate is String && airdate.isNotEmpty) {
+        final parsed = DateTime.tryParse(airdate);
+        if (parsed != null && parsed.isAfter(DateTime.now())) continue;
+      }
       episodes.add(
         WatchEpisode(
           season: season,
@@ -305,6 +378,10 @@ class WatchService {
         final season = item['season'];
         final number = item['number'];
         final airdate = item['airdate'];
+      if (airdate is String && airdate.isNotEmpty) {
+        final parsed = DateTime.tryParse(airdate);
+        if (parsed != null && parsed.isAfter(DateTime.now())) continue;
+      }
         if (season is! int ||
             season < 2 ||
             number is! int ||
@@ -404,5 +481,8 @@ class WatchService {
     return body;
   }
 
-  void dispose() => _client.close();
+  void dispose() {
+    _tmdb.dispose();
+    _client.close();
+  }
 }

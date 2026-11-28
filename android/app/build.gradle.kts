@@ -22,9 +22,18 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("musico-release.jks")
+            storePassword = "musico123"
+            keyAlias = "musico"
+            keyPassword = "musico123"
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }

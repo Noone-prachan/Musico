@@ -4,8 +4,23 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../models/anime_stream.dart';
+import 'anime_provider.dart';
 
-class AnimeStreamService {
+class AnimeStreamService implements AnimeProvider {
+  @override
+  String get id => 'hianime';
+
+  @override
+  String get name => 'HiAnime';
+
+  @override
+  String get description => 'Sub and English dub, multiple mirrors';
+
+  @override
+  bool get isExtension => false;
+
+  @override
+  List<String> get supportedLanguages => const ['ja', 'en'];
   AnimeStreamService({
     http.Client? client,
     this.timeout = const Duration(seconds: 25),
@@ -44,6 +59,7 @@ class AnimeStreamService {
     return baseUrl;
   }
 
+  @override
   Future<List<AnimeSearchResult>> search(String query) async {
     final cleaned = query.trim();
     if (cleaned.isEmpty) return const [];
@@ -56,6 +72,7 @@ class AnimeStreamService {
     return parseSearchHtml(html);
   }
 
+  @override
   Future<List<AnimeEpisode>> episodes(AnimeSearchResult show) async {
     final numericId = show.numericId;
     if (!RegExp(r'^\d+$').hasMatch(numericId)) {
@@ -76,6 +93,7 @@ class AnimeStreamService {
     return parsed;
   }
 
+  @override
   Future<AnimeStreamSource> resolveStream(
     AnimeEpisode episode, {
     String mode = 'sub',
@@ -109,6 +127,29 @@ class AnimeStreamService {
         const AnimeStreamException(
           'This episode has no playable stream right now. Try another episode.',
         );
+  }
+
+  static List<String> parseAvailableModes(String body) {
+    final html = unwrapApiHtml(body);
+    final modes = <String>[];
+    for (final chunk in html.split('server-item').skip(1)) {
+      final type = _attribute(chunk, 'data-type')?.trim().toLowerCase();
+      if (type != null && type.isNotEmpty && !modes.contains(type)) {
+        modes.add(type);
+      }
+    }
+    return modes;
+  }
+
+  @override
+  Future<List<String>> availableModes(AnimeEpisode episode) async {
+    final host = await _host();
+    final servers = await _get(
+      '$host/api/theme/episode/servers?episodeId=${episode.id}',
+      referer: '$host/',
+      accept: 'application/json',
+    );
+    return parseAvailableModes(servers);
   }
 
   static List<String> serverHashes(String body, String mode) {

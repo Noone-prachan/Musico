@@ -52,6 +52,137 @@ class YouTubeDownloadService {
   static bool _androidProgressHandlerInstalled = false;
   static int _nextAndroidDownloadId = 0;
 
+  Future<({File file, String title, String? sourceUrl})?>
+  findArtworkFromYouTube({
+    required String title,
+    required String artist,
+    required Directory artworkDirectory,
+    required String safeId,
+  }) async {
+    final query = [
+      if (artist.trim().isNotEmpty &&
+          artist.trim().toLowerCase() != 'unknown artist')
+        artist.trim(),
+      title.trim(),
+    ].join(' ').trim();
+    if (query.isEmpty) return null;
+
+    String? rawJson;
+    if (Platform.isWindows) {
+      final executable = _resolveYtDlpExecutable();
+      final result = await Process.run(executable, [
+        ...ytDlpRuntimeArguments(
+          applicationDirectory: File(Platform.resolvedExecutable).parent.path,
+        ),
+        '--dump-single-json',
+        '--no-download',
+        '--no-warnings',
+        '--quiet',
+        'ytsearch1:$query',
+      ]);
+      if (result.exitCode != 0 || result.stdout.toString().trim().isEmpty) {
+        return null;
+      }
+      rawJson = result.stdout.toString();
+    } else if (_isAndroid) {
+      try {
+        final results = await _youtube.search.search(query);
+        if (results.isEmpty) return null;
+        final first = results.first;
+        final thumbUrl = first.thumbnails.highResUrl;
+        if (thumbUrl.isEmpty) return null;
+        final response = await _client
+            .get(Uri.parse(thumbUrl))
+            .timeout(const Duration(seconds: 12));
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          return null;
+        }
+        await artworkDirectory.create(recursive: true);
+        final file = File(
+          '${artworkDirectory.path}${Platform.pathSeparator}$safeId.jpg',
+        );
+        await file.writeAsBytes(response.bodyBytes, flush: true);
+        return (file: file, title: first.title, sourceUrl: first.url);
+      } on Object {
+        return null;
+      }
+    }
+    if (rawJson == null || rawJson.trim().isEmpty) return null;
+    final decoded = jsonDecode(rawJson);
+    if (decoded is! Map<String, dynamic>) return null;
+    final entries = decoded['entries'];
+    final entry = entries is List && entries.isNotEmpty
+        ? entries.first
+        : decoded;
+    if (entry is! Map<String, dynamic>) return null;
+    final thumbUrl = entry['thumbnail'] as String?;
+    if (thumbUrl == null || thumbUrl.isEmpty) return null;
+    final response = await _client
+        .get(Uri.parse(thumbUrl))
+        .timeout(const Duration(seconds: 12));
+    if (response.statusCode < 200 || response.statusCode >= 300) return null;
+    await artworkDirectory.create(recursive: true);
+    final file = File(
+      '${artworkDirectory.path}${Platform.pathSeparator}$safeId.jpg',
+    );
+    await file.writeAsBytes(response.bodyBytes, flush: true);
+    return (
+      file: file,
+      title: (entry['title'] as String?) ?? title,
+      sourceUrl: entry['webpage_url'] as String?,
+    );
+  }
+
+  Future<({String plainLyrics, String syncedLyrics})?> findLyricsFromYouTube({
+    String? videoId,
+    required String title,
+    required String artist,
+  }) async {
+    try {
+      var resolvedId = videoId?.trim();
+      if (resolvedId == null || resolvedId.isEmpty) {
+        final query = [
+          if (artist.trim().isNotEmpty &&
+              artist.trim().toLowerCase() != 'unknown artist')
+            artist.trim(),
+          title.trim(),
+        ].join(' ').trim();
+        if (query.isEmpty) return null;
+        final results = await _youtube.search.search(query);
+        if (results.isEmpty) return null;
+        resolvedId = results.first.id.value;
+      }
+      final manifest = await _youtube.videos.closedCaptions.getManifest(
+        resolvedId,
+      );
+      if (manifest.tracks.isEmpty) return null;
+      final trackInfo = manifest.tracks.firstWhere(
+        (t) => t.language.code.toLowerCase().startsWith('en'),
+        orElse: () => manifest.tracks.first,
+      );
+      final captions = await _youtube.videos.closedCaptions.get(trackInfo);
+      if (captions.captions.isEmpty) return null;
+      final lrcBuffer = StringBuffer();
+      final plainBuffer = StringBuffer();
+      for (final cue in captions.captions) {
+        final text = cue.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+        if (text.isEmpty) continue;
+        final totalMs = cue.offset.inMilliseconds;
+        final mins = (totalMs ~/ 60000).toString().padLeft(2, '0');
+        final secs = ((totalMs % 60000) ~/ 1000).toString().padLeft(2, '0');
+        final centis = ((totalMs % 1000) ~/ 10).toString().padLeft(2, '0');
+        lrcBuffer.writeln('[$mins:$secs.$centis]$text');
+        plainBuffer.writeln(text);
+      }
+      final synced = lrcBuffer.toString().trim();
+      final plain = plainBuffer.toString().trim();
+      if (plain.isEmpty) return null;
+      return (plainLyrics: plain, syncedLyrics: synced);
+    } on Object {
+      return null;
+    }
+  }
+
   void dispose() {
     _youtube.close();
     _client.close();
@@ -975,10 +1106,14 @@ class YouTubeDownloadService {
     int? formatId,
   }) {
     return [
-      if (formatId != null && formatId > 0) '$formatId',
-      'bestvideo*[height<=$height][ext=mp4]',
+      if (formatId != null && formatId > 0)
+        '$formatId+bestaudio[ext=m4a]/$formatId+bestaudio/$formatId',
+      'bestvideo*[height<=$height][ext=mp4]+bestaudio[ext=m4a]',
+      'bestvideo*[height<=$height]+bestaudio',
       'best[height<=$height][ext=mp4]',
+      'best[height<=$height]',
       'best[ext=mp4]',
+      'best',
     ].join('/');
   }
 

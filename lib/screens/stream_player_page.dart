@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
@@ -13,6 +14,7 @@ import '../models/anime_stream.dart';
 import '../models/stream_watch_progress.dart';
 import '../models/watch_media.dart';
 import '../services/anime_stream_service.dart';
+import '../services/hls_playlist.dart';
 import '../services/stream_watch_progress_service.dart';
 import '../theme/app_theme.dart';
 
@@ -43,6 +45,7 @@ class StreamPlayerPage extends StatefulWidget {
     required this.episodes,
     required this.initialIndex,
     required this.category,
+    this.preferredAudioLanguage = 'en',
     required this.catalogId,
     this.badge,
     this.posterUrl,
@@ -51,6 +54,7 @@ class StreamPlayerPage extends StatefulWidget {
   });
 
   final String title;
+  final String preferredAudioLanguage;
   final String? badge;
   final String? posterUrl;
   final List<PlayerEpisode> episodes;
@@ -75,10 +79,13 @@ class _StreamPlayerPageState extends State<StreamPlayerPage> {
   late final _StreamPlaybackHandler _backgroundHandler;
   late int _index;
   AnimeStreamSource? _source;
+  HlsPlaylist _playlist = HlsPlaylist.empty;
+  int? _selectedBitrate;
   bool _loading = true;
   String? _error;
   String _selectedSubtitleId = 'auto';
   bool _muted = false;
+  double _volume = 100;
   bool _controlsVisible = true;
   bool _isClosing = false;
   bool _hasLoadedEpisode = false;
@@ -180,6 +187,8 @@ class _StreamPlayerPageState extends State<StreamPlayerPage> {
       _loading = true;
       _error = null;
       _source = null;
+      _playlist = HlsPlaylist.empty;
+      _selectedBitrate = null;
       _selectedSubtitleId = 'auto';
       _subtitleSelectionMade = false;
       _controlsVisible = true;
@@ -187,10 +196,14 @@ class _StreamPlayerPageState extends State<StreamPlayerPage> {
     final episode = widget.episodes[index];
     try {
       final source = await episode.resolve();
+      final resumeAt = (index == widget.initialIndex && widget.initialPositionMs > 0)
+          ? Duration(milliseconds: widget.initialPositionMs)
+          : null;
       await _player
           .open(
             Media(
               source.url,
+              start: resumeAt,
               httpHeaders: {
                 if (source.referer.isNotEmpty) 'Referer': source.referer,
                 'User-Agent': AnimeStreamService.userAgent,
@@ -205,9 +218,6 @@ class _StreamPlayerPageState extends State<StreamPlayerPage> {
             ),
           );
       if (!mounted) return;
-      if (index == widget.initialIndex && widget.initialPositionMs > 0) {
-        await _player.seek(Duration(milliseconds: widget.initialPositionMs));
-      }
       _hasLoadedEpisode = true;
       setState(() => _source = source);
       _startBackgroundSession();
@@ -217,6 +227,7 @@ class _StreamPlayerPageState extends State<StreamPlayerPage> {
       _startWatchdog();
       _watchForFirstFrame();
       unawaited(_applyTracks(source, generation));
+      unawaited(_loadPlaylistInfo(source, generation));
     } on WatchException catch (error) {
       if (!mounted) return;
       setState(() {
@@ -379,9 +390,10 @@ class _StreamPlayerPageState extends State<StreamPlayerPage> {
 
   void _startWatchdog() {
     _watchdog?.cancel();
-    _watchdog = Timer(const Duration(seconds: 25), () {
+    _watchdog = Timer(const Duration(seconds: 45), () {
       if (!mounted || !_loading || _error != null) return;
-      if (_player.state.position > Duration.zero) {
+      if (_player.state.position > Duration.zero ||
+          _player.state.duration > Duration.zero) {
         _frameTimer?.cancel();
         setState(() => _loading = false);
         _scheduleControlsHide();
@@ -414,20 +426,32 @@ class _StreamPlayerPageState extends State<StreamPlayerPage> {
 
   Future<void> _applyTracks(AnimeStreamSource source, int generation) async {
     try {
-      final audioTracks = _player.state.tracks.audio;
+      final preferred = widget.preferredAudioLanguage.trim().toLowerCase();
+      var audioTracks = _player.state.tracks.audio;
+      if (audioTracks.where((t) => t.id != 'auto' && t.id != 'no').isEmpty) {
+        final loaded = await _player.stream.tracks
+            .firstWhere(
+              (t) => t.audio.any((a) => a.id != 'auto' && a.id != 'no'),
+            )
+            .timeout(const Duration(seconds: 15));
+        audioTracks = loaded.audio;
+      }
       for (final track in audioTracks) {
         final language = track.language?.toLowerCase() ?? '';
         final title = track.title?.toLowerCase() ?? '';
         if (track.id == 'auto' || track.id == 'no') continue;
-        if (language.startsWith('en') || title.contains('english')) {
+        if (preferred.isNotEmpty &&
+            (language.startsWith(preferred) ||
+                title.contains(preferred) ||
+                (preferred == 'en' && title.contains('english')))) {
           if (generation != _loadGeneration) return;
           await _player.setAudioTrack(track);
           break;
         }
       }
-    } on Exception catch (error, stackTrace) {
+    } on Object catch (error, stackTrace) {
       debugPrint(
-        'Preferred English audio could not be selected: $error\n$stackTrace',
+        'Preferred audio track could not be selected: $error\n$stackTrace',
       );
     }
     try {
@@ -465,6 +489,119 @@ class _StreamPlayerPageState extends State<StreamPlayerPage> {
         'Preferred English subtitles could not be selected: $error\n$stackTrace',
       );
     }
+  }
+
+  /// Reads the master playlist so the quality menu can offer real renditions.
+  Future<void> _loadPlaylistInfo(
+    AnimeStreamSource source,
+    int generation,
+  ) async {
+    if (!source.url.toLowerCase().contains('.m3u8')) return;
+    try {
+      final response = await http
+          .get(
+            Uri.parse(source.url),
+            headers: {
+              if (source.referer.isNotEmpty) 'Referer': source.referer,
+              'User-Agent': AnimeStreamService.userAgent,
+            },
+          )
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode != 200) return;
+      if (!mounted || generation != _loadGeneration) return;
+      final playlist = HlsPlaylist.parse(
+        utf8.decode(response.bodyBytes, allowMalformed: true),
+      );
+      if (playlist.isEmpty || !mounted) return;
+      setState(() => _playlist = playlist);
+    } on Object catch (error) {
+      debugPrint('Playlist details could not be read: $error');
+    }
+  }
+
+  /// Switches the HLS rendition mpv should load. `null` restores automatic
+  /// quality selection.
+  Future<void> _selectQuality(int? bitrate) async {
+    final platform = _player.platform;
+    try {
+      if (platform is NativePlayer) {
+        await platform.setProperty(
+          'hls-bitrate',
+          bitrate == null ? 'auto' : '$bitrate',
+        );
+        if (mounted) setState(() => _selectedBitrate = bitrate);
+      }
+    } on Object catch (error) {
+      debugPrint('Quality could not be changed: $error');
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('That quality could not be selected.')),
+      );
+    }
+  }
+
+  Future<void> _selectAudio(AudioTrack track) async {
+    try {
+      await _player.setAudioTrack(track);
+      if (mounted) setState(() {});
+    } on Object catch (error) {
+      debugPrint('Audio track could not be changed: $error');
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('That audio track is not available.')),
+      );
+    }
+  }
+
+  String _audioTrackLabel(AudioTrack track) {
+    final title = track.title?.trim();
+    if (title != null && title.isNotEmpty) return title;
+    final language = track.language?.trim();
+    if (language != null && language.isNotEmpty) {
+      return _languageName(language);
+    }
+    return 'Audio ${track.id}';
+  }
+
+  static String _languageName(String code) {
+    final primary = code.toLowerCase().split(RegExp(r'[-_]')).first;
+    const names = {
+      'en': 'English',
+      'ja': 'Japanese',
+      'it': 'Italian',
+      'es': 'Spanish',
+      'fr': 'French',
+      'de': 'German',
+      'pt': 'Portuguese',
+      'hi': 'Hindi',
+      'ar': 'Arabic',
+      'ru': 'Russian',
+      'ko': 'Korean',
+      'zh': 'Chinese',
+      'ta': 'Tamil',
+      'te': 'Telugu',
+      'id': 'Indonesian',
+      'th': 'Thai',
+      'pl': 'Polish',
+      'tr': 'Turkish',
+      'nl': 'Dutch',
+      'sv': 'Swedish',
+      'da': 'Danish',
+      'no': 'Norwegian',
+      'nb': 'Norwegian',
+      'fi': 'Finnish',
+      'cs': 'Czech',
+      'hu': 'Hungarian',
+      'ro': 'Romanian',
+      'el': 'Greek',
+      'he': 'Hebrew',
+      'uk': 'Ukrainian',
+      'vi': 'Vietnamese',
+      'ms': 'Malay',
+      'tl': 'Filipino',
+      'fil': 'Filipino',
+    };
+    return names[primary] ?? code.toUpperCase();
   }
 
   Future<String?> _downloadSubtitle(String url, String referer) async {
@@ -772,6 +909,152 @@ class _StreamPlayerPageState extends State<StreamPlayerPage> {
             stream: _player.stream.tracks,
             initialData: _player.state.tracks,
             builder: (context, snapshot) {
+              final variants = _playlist.variants;
+              if (variants.isNotEmpty) {
+                return PopupMenuButton<String>(
+                  tooltip: 'Video quality',
+                  color: const Color(0xFF242521),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  onSelected: (value) {
+                    if (value == 'auto') {
+                      unawaited(_selectQuality(null));
+                      return;
+                    }
+                    unawaited(_selectQuality(int.tryParse(value)));
+                  },
+                  itemBuilder: (context) => [
+                    PopupMenuItem<String>(
+                      value: 'auto',
+                      child: _qualityRow(
+                        label: 'Auto',
+                        selected: _selectedBitrate == null,
+                      ),
+                    ),
+                    for (final variant in variants)
+                      if (variant.bandwidth != null)
+                        PopupMenuItem<String>(
+                          value: '${variant.bandwidth}',
+                          child: _qualityRow(
+                            label: variant.label,
+                            selected: _selectedBitrate == variant.bandwidth,
+                          ),
+                        ),
+                  ],
+                  icon: const Icon(Icons.hd_outlined),
+                );
+              }
+              final videoTracks = snapshot.data?.video ?? const <VideoTrack>[];
+              final selectableVideoTracks = videoTracks
+                  .where((track) => track.id != 'no' && track.id != 'auto')
+                  .toList();
+              final currentVideoId = _player.state.track.video.id;
+              return PopupMenuButton<String>(
+                tooltip: 'Video quality',
+                color: const Color(0xFF242521),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                onSelected: (id) {
+                  final selected = videoTracks
+                      .where((track) => track.id == id)
+                      .firstOrNull;
+                  if (selected != null) {
+                    unawaited(_player.setVideoTrack(selected));
+                  }
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem<String>(
+                    value: 'auto',
+                    child: _qualityRow(
+                      label: 'Auto',
+                      selected: currentVideoId == 'auto',
+                    ),
+                  ),
+                  if (selectableVideoTracks.isEmpty)
+                    const PopupMenuItem<String>(
+                      enabled: false,
+                      child: Text(
+                        'Only one quality available',
+                        style: TextStyle(color: _playerMuted),
+                      ),
+                    ),
+                  for (final track in selectableVideoTracks)
+                    PopupMenuItem<String>(
+                      value: track.id,
+                      child: _qualityRow(
+                        label: track.h != null && track.h! > 0
+                            ? '${track.h}p'
+                            : (track.title?.isNotEmpty == true
+                                  ? track.title!
+                                  : track.id),
+                        selected: currentVideoId == track.id,
+                      ),
+                    ),
+                ],
+                icon: const Icon(Icons.hd_outlined),
+              );
+            },
+          ),
+          StreamBuilder<Tracks>(
+            stream: _player.stream.tracks,
+            initialData: _player.state.tracks,
+            builder: (context, snapshot) {
+              final tracks = snapshot.data?.audio ?? const <AudioTrack>[];
+              final selectable = tracks
+                  .where((track) => track.id != 'no' && track.id != 'auto')
+                  .toList();
+              final currentId = _player.state.track.audio.id;
+              return PopupMenuButton<String>(
+                tooltip: 'Audio language',
+                color: const Color(0xFF242521),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                onSelected: (id) {
+                  if (id == 'auto') {
+                    unawaited(_player.setAudioTrack(AudioTrack.auto()));
+                    return;
+                  }
+                  final selected = selectable
+                      .where((track) => track.id == id)
+                      .firstOrNull;
+                  if (selected != null) unawaited(_selectAudio(selected));
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem<String>(
+                    value: 'auto',
+                    child: _qualityRow(
+                      label: 'Auto',
+                      selected: currentId == 'auto',
+                    ),
+                  ),
+                  if (selectable.isEmpty)
+                    const PopupMenuItem<String>(
+                      enabled: false,
+                      child: Text(
+                        'Only one audio track',
+                        style: TextStyle(color: _playerMuted),
+                      ),
+                    ),
+                  for (final track in selectable)
+                    PopupMenuItem<String>(
+                      value: track.id,
+                      child: _qualityRow(
+                        label: _audioTrackLabel(track),
+                        selected: currentId == track.id,
+                      ),
+                    ),
+                ],
+                icon: const Icon(Icons.graphic_eq_rounded),
+              );
+            },
+          ),
+          StreamBuilder<Tracks>(
+            stream: _player.stream.tracks,
+            initialData: _player.state.tracks,
+            builder: (context, snapshot) {
               final tracks = snapshot.data?.subtitle ?? const <SubtitleTrack>[];
               final selectableTracks = tracks
                   .where((track) => track.id != 'no' && track.id != 'auto')
@@ -809,14 +1092,50 @@ class _StreamPlayerPageState extends State<StreamPlayerPage> {
             tooltip: _muted ? 'Unmute' : 'Mute',
             onPressed: () {
               setState(() => _muted = !_muted);
-              unawaited(_player.setVolume(_muted ? 0 : 100));
+              unawaited(_player.setVolume(_muted ? 0 : _volume));
             },
             icon: Icon(
-              _muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+              _muted || _volume == 0
+                  ? Icons.volume_off_rounded
+                  : Icons.volume_up_rounded,
             ),
           ),
+          if (MediaQuery.sizeOf(context).width >= 600)
+            SizedBox(
+              width: 90,
+              child: Slider(
+                min: 0,
+                max: 100,
+                value: _muted ? 0 : _volume,
+                onChanged: (value) {
+                  setState(() {
+                    _volume = value;
+                    _muted = value == 0;
+                  });
+                  unawaited(_player.setVolume(value));
+                },
+              ),
+            ),
         ],
       ),
+    );
+  }
+
+  Widget _qualityRow({required String label, required bool selected}) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 22,
+          child: selected
+              ? const Icon(
+                  Icons.check_rounded,
+                  size: 18,
+                  color: _playerForeground,
+                )
+              : null,
+        ),
+        Text(label, style: const TextStyle(color: _playerForeground)),
+      ],
     );
   }
 

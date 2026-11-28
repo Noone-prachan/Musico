@@ -35,10 +35,12 @@ void main() {
     final appState = AppState();
 
     await tester.pumpWidget(_watchApp(appState: appState, tab: 1));
+    await _scrollToText(tester, 'Featured TV shows');
     expect(find.text('Featured TV shows'), findsOneWidget);
     expect(find.text('Featured movies'), findsNothing);
 
     await tester.pumpWidget(_watchApp(appState: appState, tab: 2));
+    await _scrollToText(tester, 'Featured movies');
     expect(find.text('Featured movies'), findsOneWidget);
     expect(find.text('Featured TV shows'), findsNothing);
     expect(find.text('New seasons'), findsNothing);
@@ -77,6 +79,7 @@ void main() {
 
       final watchlistButton = find.widgetWithText(TextButton, 'Watchlist');
       await tester.ensureVisible(watchlistButton);
+      await tester.pumpAndSettle();
       expect(tester.getSize(watchlistButton).height, 48);
       await tester.tap(watchlistButton);
       await tester.pumpAndSettle();
@@ -84,6 +87,7 @@ void main() {
 
       final posterTitle = find.text('Demon Slayer').first;
       await tester.ensureVisible(posterTitle);
+      await tester.pumpAndSettle();
       await tester.tap(posterTitle);
       await tester.pumpAndSettle();
       final search = tester.widget<SearchAutocompleteField>(
@@ -150,4 +154,14 @@ Widget _watchApp({required AppState appState, required int tab}) {
       ),
     ),
   );
+}
+
+Future<void> _scrollToText(WidgetTester tester, String text) async {
+  final scrollable = find
+      .byWidgetPredicate(
+        (widget) =>
+            widget is Scrollable && widget.axisDirection == AxisDirection.down,
+      )
+      .first;
+  await tester.scrollUntilVisible(find.text(text), 300, scrollable: scrollable);
 }

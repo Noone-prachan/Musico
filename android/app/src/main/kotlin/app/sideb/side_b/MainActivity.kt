@@ -373,7 +373,7 @@ class MainActivity : AudioServiceActivity() {
                         params = dict(params or {})
                         extractor_args = dict(params.get("extractor_args") or {})
                         youtube_args = dict(extractor_args.get("youtube") or {})
-                        youtube_args["player_client"] = ["android"]
+                        youtube_args["player_client"] = ["visionos", "android"]
                         extractor_args["youtube"] = youtube_args
                         params["extractor_args"] = extractor_args
                         super().__init__(params, auto_init=auto_init)

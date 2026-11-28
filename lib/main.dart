@@ -12,12 +12,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'screens/local_video_screen.dart';
+import 'screens/home_screen.dart';
 import 'screens/music_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/streaming_screen.dart';
 import 'screens/watchlist_screen.dart';
 import 'models/video_track.dart';
 import 'models/music_track.dart';
+import 'services/streaming_catalog.dart';
 import 'state/app_state.dart';
 import 'theme/app_theme.dart';
 import 'widgets/aurora_background.dart';
@@ -38,6 +40,13 @@ Future<void> main() async {
       androidStopForegroundOnPause: true,
       preloadArtwork: true,
     );
+  }
+  // Streaming sources (built-in + extensions) are ready before the first frame
+  // so the Watch tabs can show the saved source straight away.
+  try {
+    await StreamingCatalog.instance.initialize();
+  } on Object catch (error, stackTrace) {
+    debugPrint('Streaming sources could not be loaded: $error\n$stackTrace');
   }
   if (Platform.isWindows) {
     try {
@@ -772,6 +781,19 @@ class _MusicoHomeState extends State<_MusicoHome> {
 
   void _selectPage(int index) {
     if (index < 0 || index >= _pageCount) return;
+    if (index == _selectedPage) {
+      final controller = PrimaryScrollController.maybeOf(context);
+      if (controller != null && controller.hasClients) {
+        unawaited(
+          controller.animateTo(
+            0,
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOutCubic,
+          ),
+        );
+      }
+      return;
+    }
     setState(() {
       _selectedPage = index;
       _watchSeed = null;
@@ -809,7 +831,19 @@ class _MusicoHomeState extends State<_MusicoHome> {
                 _appState.currentTrack != null ||
                 _appState.tracks.isNotEmpty);
 
-        return Scaffold(
+        return PopScope(
+          canPop: _selectedPage == 0,
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop && _selectedPage != 0) {
+              Future.microtask(() {
+                if (!streamingChildHandledPop && mounted && _selectedPage != 0) {
+                  _selectPage(0);
+                }
+                streamingChildHandledPop = false;
+              });
+            }
+          },
+          child: Scaffold(
           body: SafeArea(
             child: desktop
                 ? Row(
@@ -818,6 +852,7 @@ class _MusicoHomeState extends State<_MusicoHome> {
                         appState: _appState,
                         selectedIndex: _selectedPage,
                         onSelected: _selectPage,
+                        onSettings: _openCompactSettings,
                         desktop: true,
                       ),
                       Expanded(
@@ -855,6 +890,7 @@ class _MusicoHomeState extends State<_MusicoHome> {
                                 appState: _appState,
                                 selectedIndex: _selectedPage,
                                 onSelected: _selectPage,
+                                onSettings: _openCompactSettings,
                                 desktop: false,
                               ),
                             Expanded(child: _currentScreen()),
@@ -890,7 +926,8 @@ class _MusicoHomeState extends State<_MusicoHome> {
                                   1 => 1,
                                   2 => 2,
                                   3 => 3,
-                                  _ => 4,
+                                  4 => 4,
+                                  _ => 5,
                                 },
                                 onDestinationSelected: (index) =>
                                     _selectPage(switch (index) {
@@ -898,7 +935,8 @@ class _MusicoHomeState extends State<_MusicoHome> {
                                       1 => 1,
                                       2 => 2,
                                       3 => 3,
-                                      _ => 7,
+                                      4 => 4,
+                                      _ => 8,
                                     }),
                                 height: 62,
                                 backgroundColor: Colors.transparent,
@@ -907,6 +945,11 @@ class _MusicoHomeState extends State<_MusicoHome> {
                                     NavigationDestinationLabelBehavior
                                         .onlyShowSelected,
                                 destinations: const [
+                                  NavigationDestination(
+                                    icon: Icon(Icons.home_outlined),
+                                    selectedIcon: Icon(Icons.home_rounded),
+                                    label: 'Home',
+                                  ),
                                   NavigationDestination(
                                     icon: Icon(Icons.library_music_outlined),
                                     selectedIcon: Icon(
@@ -924,7 +967,7 @@ class _MusicoHomeState extends State<_MusicoHome> {
                                   NavigationDestination(
                                     icon: Icon(Icons.live_tv_outlined),
                                     selectedIcon: Icon(Icons.live_tv_outlined),
-                                    label: 'TV',
+                                    label: 'Series',
                                   ),
                                   NavigationDestination(
                                     icon: Icon(Icons.movie_outlined),
@@ -946,6 +989,7 @@ class _MusicoHomeState extends State<_MusicoHome> {
                     ],
                   ),
                 ),
+        ),
         );
       },
     );
@@ -953,32 +997,33 @@ class _MusicoHomeState extends State<_MusicoHome> {
 
   Widget _currentScreen() {
     final screen = switch (_selectedPage) {
-      0 => MusicScreen(appState: _appState),
-      1 => StreamingScreen(
+      0 => HomeScreen(appState: _appState, onNavigate: _selectPage),
+      1 => MusicScreen(appState: _appState),
+      2 => StreamingScreen(
         appState: _appState,
         initialTab: 0,
         onOpenTvShows: _openTvWithQuery,
       ),
-      2 => StreamingScreen(
+      3 => StreamingScreen(
         key: ValueKey<String>('tv-$_watchSeedTick'),
         appState: _appState,
         initialTab: 1,
         seedQuery: _watchSeed,
         onOpenTvShows: _openTvWithQuery,
       ),
-      3 => StreamingScreen(
+      4 => StreamingScreen(
         key: ValueKey<String>('movies-$_watchSeedTick'),
         appState: _appState,
         initialTab: 2,
         seedQuery: _watchSeed,
       ),
-      4 => MusicPlaylistsScreen(
+      5 => MusicPlaylistsScreen(
         appState: _appState,
-        onOpenPlaylist: () => _selectPage(0),
+        onOpenPlaylist: () => _selectPage(1),
       ),
-      5 => MusicScreen(appState: _appState, favoritesOnly: true),
-      6 => WatchlistScreen(appState: _appState),
-      7 => _MoreScreen(appState: _appState, onSelected: _selectPage),
+      6 => MusicScreen(appState: _appState, favoritesOnly: true),
+      7 => WatchlistScreen(appState: _appState),
+      8 => _MoreScreen(appState: _appState, onSelected: _selectPage),
       _ => SettingsScreen(appState: _appState),
     };
     return AnimatedSwitcher(
@@ -999,9 +1044,9 @@ class _MoreScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final destinations = [
-      (label: 'Playlists', icon: Icons.queue_music_outlined, page: 4),
-      (label: 'Favorites', icon: Icons.favorite_border_rounded, page: 5),
-      (label: 'Watchlist', icon: Icons.bookmarks_outlined, page: 6),
+      (label: 'Playlists', icon: Icons.queue_music_outlined, page: 5),
+      (label: 'Favorites', icon: Icons.favorite_border_rounded, page: 6),
+      (label: 'Watchlist', icon: Icons.bookmarks_outlined, page: 7),
     ];
 
     return ListView(
@@ -1036,6 +1081,7 @@ class _MoreScreen extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 26),
+        Text('Streaming', style: Theme.of(context).textTheme.titleLarge),
         Text('On this device', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 10),
         Card(
@@ -1088,24 +1134,37 @@ class _SideNavigation extends StatelessWidget {
     required this.appState,
     required this.selectedIndex,
     required this.onSelected,
+    required this.onSettings,
     required this.desktop,
   });
 
   final AppState appState;
   final int selectedIndex;
   final ValueChanged<int> onSelected;
+  final VoidCallback onSettings;
   final bool desktop;
 
   @override
   Widget build(BuildContext context) {
     if (!desktop) {
       return NavigationRail(
-        selectedIndex: selectedIndex == 8 ? 7 : selectedIndex,
-        onDestinationSelected: (index) => onSelected(index == 7 ? 8 : index),
+        selectedIndex: selectedIndex == 8 ? null : selectedIndex,
+        onDestinationSelected: (index) {
+          if (index == 8) {
+            onSettings();
+          } else {
+            onSelected(index);
+          }
+        },
         labelType: NavigationRailLabelType.all,
         groupAlignment: -.75,
         backgroundColor: MusicoPalette.paper,
         destinations: const [
+          NavigationRailDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home_rounded),
+            label: Text('Home'),
+          ),
           NavigationRailDestination(
             icon: Icon(Icons.library_music_outlined),
             selectedIcon: Icon(Icons.library_music_outlined),
@@ -1119,7 +1178,7 @@ class _SideNavigation extends StatelessWidget {
           NavigationRailDestination(
             icon: Icon(Icons.live_tv_outlined),
             selectedIcon: Icon(Icons.live_tv_outlined),
-            label: Text('TV shows'),
+            label: Text('Series'),
           ),
           NavigationRailDestination(
             icon: Icon(Icons.movie_outlined),
@@ -1189,50 +1248,50 @@ class _SideNavigation extends StatelessWidget {
             icon: Icons.library_music_outlined,
             selectedIcon: Icons.library_music_outlined,
             label: 'Songs',
-            selected: selectedIndex == 0,
-            onTap: () => onSelected(0),
+            selected: selectedIndex == 1,
+            onTap: () => onSelected(1),
           ),
           _NavigationItem(
             icon: Icons.ondemand_video_outlined,
             selectedIcon: Icons.ondemand_video_outlined,
             label: 'Anime',
-            selected: selectedIndex == 1,
-            onTap: () => onSelected(1),
+            selected: selectedIndex == 2,
+            onTap: () => onSelected(2),
           ),
           _NavigationItem(
             icon: Icons.live_tv_outlined,
             selectedIcon: Icons.live_tv_outlined,
             label: 'TV Shows',
-            selected: selectedIndex == 2,
-            onTap: () => onSelected(2),
+            selected: selectedIndex == 3,
+            onTap: () => onSelected(3),
           ),
           _NavigationItem(
             icon: Icons.movie_outlined,
             selectedIcon: Icons.movie_outlined,
             label: 'Movies',
-            selected: selectedIndex == 3,
-            onTap: () => onSelected(3),
+            selected: selectedIndex == 4,
+            onTap: () => onSelected(4),
           ),
           _NavigationItem(
             icon: Icons.queue_music_outlined,
             selectedIcon: Icons.queue_music_outlined,
             label: 'Playlists',
-            selected: selectedIndex == 4,
-            onTap: () => onSelected(4),
+            selected: selectedIndex == 5,
+            onTap: () => onSelected(5),
           ),
           _NavigationItem(
             icon: Icons.favorite_border_rounded,
             selectedIcon: Icons.favorite_border_rounded,
             label: 'Favorites',
-            selected: selectedIndex == 5,
-            onTap: () => onSelected(5),
+            selected: selectedIndex == 6,
+            onTap: () => onSelected(6),
           ),
           _NavigationItem(
             icon: Icons.bookmarks_outlined,
             selectedIcon: Icons.bookmarks_outlined,
             label: 'Watchlist',
-            selected: selectedIndex == 6,
-            onTap: () => onSelected(6),
+            selected: selectedIndex == 7,
+            onTap: () => onSelected(7),
           ),
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
@@ -1242,8 +1301,8 @@ class _SideNavigation extends StatelessWidget {
             icon: Icons.settings_outlined,
             selectedIcon: Icons.settings_outlined,
             label: 'Settings',
-            selected: selectedIndex == 8,
-            onTap: () => onSelected(8),
+            selected: false,
+            onTap: onSettings,
           ),
           const Spacer(),
           if (appState.currentTrack case final track?) ...[

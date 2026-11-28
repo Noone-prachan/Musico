@@ -426,7 +426,19 @@ class AppState extends ChangeNotifier {
       }
       _notify();
     });
-    player.positionStream.listen((_) => _notify());
+    // Throttle position updates: only notify when the display second changes
+    // (or lyrics index shifts) to avoid rebuilding the entire widget tree ~5×/s.
+    int lastPositionSecond = -1;
+    int lastLyricIndex = -1;
+    player.positionStream.listen((position) {
+      final second = position.inSeconds;
+      final lyricIndex = currentSyncedLyricIndex(syncedLyricLines, position);
+      if (second != lastPositionSecond || lyricIndex != lastLyricIndex) {
+        lastPositionSecond = second;
+        lastLyricIndex = lyricIndex;
+        _notify();
+      }
+    });
     player.processingStateStream.listen((processingState) {
       if (processingState == ProcessingState.completed &&
           (autoplay || repeatOne)) {
@@ -491,7 +503,15 @@ class AppState extends ChangeNotifier {
       }
       _notify();
     });
-    videoPlayer.stream.position.listen((_) => _notify());
+    // Throttle video position updates to once per second.
+    int lastVideoSecond = -1;
+    videoPlayer.stream.position.listen((position) {
+      final second = position.inSeconds;
+      if (second != lastVideoSecond) {
+        lastVideoSecond = second;
+        _notify();
+      }
+    });
     videoPlayer.stream.duration.listen((_) => _notify());
     videoPlayer.stream.completed.listen((completed) {
       if (completed) {
@@ -2026,34 +2046,59 @@ class AppState extends ChangeNotifier {
 
     try {
       final metadata = track.displayMetadata;
+      final directory = await _mediaStorageDirectory('artwork');
+      final safeId = track.id.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+      MusicTrack? updated;
+
       final artwork = await _artworkService
           .findForTrack(title: metadata.title, artist: metadata.artist)
           .timeout(const Duration(seconds: 15));
-      if (artwork == null) return;
-      final directory = await _mediaStorageDirectory('artwork');
-      final safeId = track.id.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
-      final file = File(
-        '${directory.path}${Platform.pathSeparator}$safeId${artwork.extension}',
-      );
-      await file.writeAsBytes(artwork.bytes, flush: true);
-      final updated = track.withArtwork(
-        path: file.path,
-        title: artwork.title,
-        creator: artwork.creator,
-        license: artwork.license,
-        licenseUrl: artwork.licenseUrl,
-        sourceUrl: artwork.sourceUrl,
-        attribution: artwork.attribution,
-      );
+      if (artwork != null) {
+        final file = File(
+          '${directory.path}${Platform.pathSeparator}$safeId${artwork.extension}',
+        );
+        await file.writeAsBytes(artwork.bytes, flush: true);
+        updated = track.withArtwork(
+          path: file.path,
+          title: artwork.title,
+          creator: artwork.creator,
+          license: artwork.license,
+          licenseUrl: artwork.licenseUrl,
+          sourceUrl: artwork.sourceUrl,
+          attribution: artwork.attribution,
+        );
+      } else {
+        final ytArtwork = await _youtubeDownloadService
+            .findArtworkFromYouTube(
+              title: metadata.title,
+              artist: metadata.artist,
+              artworkDirectory: directory,
+              safeId: safeId,
+            )
+            .timeout(const Duration(seconds: 20));
+        if (ytArtwork != null) {
+          updated = track.withArtwork(
+            path: ytArtwork.file.path,
+            title: ytArtwork.title,
+            creator: metadata.artist,
+            license: 'YouTube thumbnail',
+            licenseUrl: '',
+            sourceUrl: ytArtwork.sourceUrl ?? '',
+            attribution: '',
+          );
+        }
+      }
+      if (updated == null) return;
+      final resolvedTrack = updated;
       tracks = tracks
-          .map((item) => item.id == track.id ? updated : item)
+          .map((item) => item.id == track.id ? resolvedTrack : item)
           .toList();
-      if (currentTrack?.id == track.id) currentTrack = updated;
+      if (currentTrack?.id == track.id) currentTrack = resolvedTrack;
       await _persistTracks();
       if (currentTrack?.id == track.id) {
         if (Platform.isWindows) _scheduleWindowsMediaControlsSync();
         if (Platform.isAndroid) {
-          await _refreshAndroidNowPlayingArtwork(updated);
+          await _refreshAndroidNowPlayingArtwork(resolvedTrack);
         }
       }
       artworkErrors.remove(track.id);
@@ -2392,8 +2437,24 @@ class AppState extends ChangeNotifier {
                   : player.duration?.inMilliseconds ?? 0,
             )
           : _videoLyricsMetadata(video!);
-      final payload = await _findLyricsRecord(metadata);
+      var payload = await _findLyricsRecord(metadata);
       if (requestId != _lyricsRequestId) return;
+      if (payload == null) {
+        final ytLyrics = await _youtubeDownloadService
+            .findLyricsFromYouTube(
+              videoId: video?.videoId,
+              title: metadata.$1,
+              artist: metadata.$2,
+            )
+            .timeout(const Duration(seconds: 15), onTimeout: () => null);
+        if (requestId != _lyricsRequestId) return;
+        if (ytLyrics != null) {
+          payload = <String, dynamic>{
+            'plainLyrics': ytLyrics.plainLyrics,
+            'syncedLyrics': ytLyrics.syncedLyrics,
+          };
+        }
+      }
       if (payload == null) {
         lyricsStatus = LyricsStatus.notFound;
         return;
@@ -2407,7 +2468,29 @@ class AppState extends ChangeNotifier {
         lyricsStatus = LyricsStatus.notFound;
         return;
       }
+      var lines = content.syncedLines;
+      final recordDurationSec = payload['duration'];
+      final trackDurationMs = metadata.$3;
+      if (lines.isNotEmpty &&
+          recordDurationSec is num &&
+          recordDurationSec > 0 &&
+          trackDurationMs > 0) {
+        final diffMs = trackDurationMs - (recordDurationSec * 1000).round();
+        if (diffMs.abs() > 3000 && diffMs > 0) {
+          lines = [
+            for (final line in lines)
+              SyncedLyricLine(
+                timestamp: Duration(
+                  milliseconds: (line.timestamp.inMilliseconds + diffMs)
+                      .clamp(0, trackDurationMs),
+                ),
+                text: line.text,
+              ),
+          ];
+        }
+      }
       lyrics = content.text;
+      syncedLyricLines = lines;
       syncedLyricLines = content.syncedLines;
       lyricsStatus = LyricsStatus.loaded;
     } on TimeoutException catch (error, stackTrace) {

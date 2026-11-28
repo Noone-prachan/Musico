@@ -77,6 +77,25 @@ on your device; online features connect to the services they need.
   </tr>
 </table>
 
+## Screenshots
+
+Musico running on Android:
+
+<p align="center">
+  <img src="assets/screenshots/showcase.jpg" alt="Musico on Android: Home, Anime, and Movies" width="100%">
+</p>
+<p align="center"><sub>Home &middot; Anime &middot; Movies</sub></p>
+
+<p align="center">
+  <img src="assets/screenshots/library-screens.jpg" alt="Musico on Android: Songs and TV Shows" width="100%">
+</p>
+<p align="center"><sub>Songs &middot; TV Shows</sub></p>
+
+For help choosing a streaming source, see the
+[streaming provider guide](docs/streaming-provider-guide/README.md), also
+available as a download from the
+[v1.0.2 release](https://github.com/Noone-prachan/Musico/releases/download/v1.0.2/Musico-Streaming-Provider-Guide-v1.0.2.zip).
+
 ## YouTube downloads
 
 Search YouTube inside Musico and save eligible results as MP3 audio or MP4

@@ -2,7 +2,7 @@
 
 #define AppName "Musico"
 #define AppPublisher "Musico"
-#define AppVersion "1.0.0"
+#define AppVersion "1.0.2"
 
 [Setup]
 AppId={{B9F0E3C8-7D9C-4B27-9EE8-8F6F8B5F2A11}

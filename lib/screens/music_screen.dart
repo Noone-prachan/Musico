@@ -643,12 +643,22 @@ class _MusicLibrary extends StatelessWidget {
               style: Theme.of(context).textTheme.bodySmall,
             ),
           )
-        else ...[
-          for (var index = 0; index < tracks.length; index++) ...[
-            if (index > 0) const SizedBox(height: 8),
-            _TrackRow(track: tracks[index], appState: appState),
-          ],
-        ],
+        else
+          // Use ListView.builder via Column children to virtualize track rows.
+          // Wrap in a SizedBox so it doesn't fight the outer ListView for
+          // scroll extent.
+          SizedBox(
+            height: tracks.length * 88.0, // ~80px row + 8px spacing
+            child: ListView.builder(
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: tracks.length,
+              itemExtent: 88.0,
+              itemBuilder: (context, index) => Padding(
+                padding: EdgeInsets.only(top: index > 0 ? 8 : 0),
+                child: _TrackRow(track: tracks[index], appState: appState),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -1054,21 +1064,19 @@ class _VideoLibrary extends StatelessWidget {
         else
           Container(
             decoration: _surfaceDecoration(),
-            child: Column(
-              children: [
-                for (
-                  var index = 0;
-                  index < appState.videoTracks.length;
-                  index++
-                ) ...[
-                  _VideoRow(
-                    video: appState.videoTracks[index],
-                    appState: appState,
-                  ),
-                  if (index != appState.videoTracks.length - 1)
-                    const Divider(height: 1, indent: 54, endIndent: 12),
-                ],
-              ],
+            child: ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: appState.videoTracks.length * 2 - 1,
+              itemBuilder: (context, i) {
+                if (i.isOdd) {
+                  return const Divider(height: 1, indent: 54, endIndent: 12);
+                }
+                return _VideoRow(
+                  video: appState.videoTracks[i ~/ 2],
+                  appState: appState,
+                );
+              },
             ),
           ),
       ],
@@ -1115,7 +1123,7 @@ class _VideoRow extends StatelessWidget {
             ),
           IconButton(
             tooltip: 'Remove video from this device',
-            onPressed: () => appState.removeVideo(video),
+            onPressed: () => _confirmRemoveVideo(context, appState, video),
             icon: const Icon(Icons.close_outlined, size: 17),
           ),
         ],
@@ -2563,8 +2571,19 @@ class PlayerDock extends StatelessWidget {
           );
         }
 
+        if (MediaQuery.sizeOf(context).height < 680) {
+          return _ShortPlayerDock(
+            appState: appState,
+            current: current,
+            playing: playing,
+            position: position,
+            total: total,
+            progress: progress,
+          );
+        }
+
         return Container(
-          height: 88,
+          height: 104,
           decoration: const BoxDecoration(
             color: MusicoPalette.paper,
             border: Border(top: BorderSide(color: MusicoPalette.line)),
@@ -2751,6 +2770,131 @@ class PlayerDock extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _ShortPlayerDock extends StatelessWidget {
+  const _ShortPlayerDock({
+    required this.appState,
+    required this.current,
+    required this.playing,
+    required this.position,
+    required this.total,
+    required this.progress,
+  });
+
+  final AppState appState;
+  final MusicTrack? current;
+  final bool playing;
+  final Duration position;
+  final Duration total;
+  final double progress;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 72,
+      decoration: const BoxDecoration(
+        color: MusicoPalette.paper,
+        border: Border(top: BorderSide(color: MusicoPalette.line)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 210,
+            child: Row(
+              children: [
+                _PlayerArtwork(track: current, size: 38),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _PlayerTrackInfo(
+                    track: current,
+                    playing: playing,
+                    small: true,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            tooltip: 'Play previous',
+            visualDensity: VisualDensity.compact,
+            onPressed: current == null ? null : appState.playPrevious,
+            icon: const Icon(Icons.skip_previous_rounded, size: 22),
+          ),
+          _PlayButton(
+            playing: playing,
+            canPlay: current != null || appState.tracks.isNotEmpty,
+            onPressed: appState.togglePlayback,
+            size: 38,
+          ),
+          IconButton(
+            tooltip: 'Play next',
+            visualDensity: VisualDensity.compact,
+            onPressed: current == null ? null : appState.playNext,
+            icon: const Icon(Icons.skip_next_rounded, size: 22),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 41,
+            child: Text(
+              _formatDuration(position),
+              textAlign: TextAlign.right,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                fontSize: 12,
+                fontFeatures: const [],
+              ),
+            ),
+          ),
+          Expanded(
+            child: SliderTheme(
+              data: _playbackProgressSliderTheme(context),
+              child: Slider(
+                min: 0,
+                max: 1,
+                value: progress,
+                onChanged: total == Duration.zero
+                    ? null
+                    : (value) => appState.seek(
+                        Duration(
+                          milliseconds: (total.inMilliseconds * value).round(),
+                        ),
+                      ),
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 41,
+            child: Text(
+              _formatDuration(total),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                fontSize: 12,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          const SizedBox(
+            width: 18,
+            child: Icon(
+              Icons.volume_up_outlined,
+              size: 17,
+              color: MusicoPalette.softInk,
+            ),
+          ),
+          SizedBox(
+            width: 100,
+            child: Slider(
+              min: 0,
+              max: 1,
+              value: appState.volume,
+              onChanged: appState.setVolume,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -3862,5 +4006,38 @@ class _VideoDetailValue extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+
+Future<void> _confirmRemoveVideo(
+  BuildContext context,
+  AppState appState,
+  VideoTrack video,
+) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Delete video?'),
+      content: Text(
+        'Are you sure you want to delete "${video.title}" from this device?',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(dialogContext, true),
+          style: FilledButton.styleFrom(
+            backgroundColor: MusicoPalette.error,
+          ),
+          child: const Text('Delete'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed == true) {
+    await appState.removeVideo(video);
   }
 }
