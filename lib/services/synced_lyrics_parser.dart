@@ -57,6 +57,35 @@ List<SyncedLyricLine> parseSyncedLyrics(String lyrics) {
   return parsed;
 }
 
+List<SyncedLyricLine> alignSyncedLyricsToDuration(
+  List<SyncedLyricLine> lines, {
+  required Duration sourceDuration,
+  required Duration targetDuration,
+}) {
+  final sourceMs = sourceDuration.inMilliseconds;
+  final targetMs = targetDuration.inMilliseconds;
+  if (lines.isEmpty ||
+      sourceMs <= 0 ||
+      targetMs <= 0 ||
+      (sourceMs - targetMs).abs() <=
+          const Duration(seconds: 3).inMilliseconds) {
+    return lines;
+  }
+
+  return [
+    for (final line in lines)
+      SyncedLyricLine(
+        timestamp: Duration(
+          milliseconds: (line.timestamp.inMilliseconds * targetMs / sourceMs)
+              .round()
+              .clamp(0, targetMs)
+              .toInt(),
+        ),
+        text: line.text,
+      ),
+  ];
+}
+
 int currentSyncedLyricIndex(List<SyncedLyricLine> lines, Duration position) {
   var low = 0;
   var high = lines.length - 1;

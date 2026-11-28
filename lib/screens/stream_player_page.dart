@@ -196,7 +196,8 @@ class _StreamPlayerPageState extends State<StreamPlayerPage> {
     final episode = widget.episodes[index];
     try {
       final source = await episode.resolve();
-      final resumeAt = (index == widget.initialIndex && widget.initialPositionMs > 0)
+      final resumeAt =
+          (index == widget.initialIndex && widget.initialPositionMs > 0)
           ? Duration(milliseconds: widget.initialPositionMs)
           : null;
       await _player
@@ -687,60 +688,84 @@ class _StreamPlayerPageState extends State<StreamPlayerPage> {
 
   @override
   Widget build(BuildContext context) {
-    return PopScope<void>(
-      canPop: _isClosing,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && !_isClosing) unawaited(_close());
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.escape): () =>
+            unawaited(_close()),
+        const SingleActivator(LogicalKeyboardKey.space): () =>
+            unawaited(_player.playOrPause()),
+        const SingleActivator(LogicalKeyboardKey.keyK): () =>
+            unawaited(_player.playOrPause()),
+        const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
+            unawaited(_seekBy(const Duration(seconds: -10))),
+        const SingleActivator(LogicalKeyboardKey.keyJ): () =>
+            unawaited(_seekBy(const Duration(seconds: -10))),
+        const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
+            unawaited(_seekBy(const Duration(seconds: 10))),
+        const SingleActivator(LogicalKeyboardKey.keyL): () =>
+            unawaited(_seekBy(const Duration(seconds: 10))),
       },
-      child: OrientationBuilder(
-        builder: (context, orientation) {
-          final isLandscape = orientation == Orientation.landscape;
-          return Theme(
-            data: _playerTheme(Theme.of(context)),
-            child: Scaffold(
-              backgroundColor: Colors.black,
-              body: SafeArea(
-                child: Listener(
-                  onPointerDown: _handlePointerDown,
-                  onPointerHover: (_) {
-                    if (!_controlsVisible && !_loading && _error == null) {
-                      setState(() => _controlsVisible = true);
-                    }
-                    _scheduleControlsHide();
-                  },
-                  onPointerUp: (_) => _scheduleControlsHide(),
-                  onPointerCancel: (_) => _scheduleControlsHide(),
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: _toggleControls,
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        _buildVideoSurface(context),
-                        Positioned(
-                          top: 0,
-                          left: 0,
-                          right: 0,
-                          child: _controlsOverlay(
-                            _buildTopBar(context, compact: isLandscape),
+      child: Focus(
+        autofocus: true,
+        child: PopScope<void>(
+          canPop: _isClosing,
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop && !_isClosing) unawaited(_close());
+          },
+          child: OrientationBuilder(
+            builder: (context, orientation) {
+              final isLandscape = orientation == Orientation.landscape;
+              return Theme(
+                data: _playerTheme(Theme.of(context)),
+                child: Scaffold(
+                  backgroundColor: Colors.black,
+                  body: SafeArea(
+                    child: MouseRegion(
+                      cursor:
+                          Platform.isWindows &&
+                              !_controlsVisible &&
+                              _player.state.playing
+                          ? SystemMouseCursors.none
+                          : SystemMouseCursors.basic,
+                      onHover: _handlePointerHover,
+                      child: Listener(
+                        onPointerDown: _handlePointerDown,
+                        onPointerUp: (_) => _scheduleControlsHide(),
+                        onPointerCancel: (_) => _scheduleControlsHide(),
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: _toggleControls,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              _buildVideoSurface(context),
+                              Positioned(
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                child: _controlsOverlay(
+                                  _buildTopBar(context, compact: isLandscape),
+                                ),
+                              ),
+                              Positioned(
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                child: _controlsOverlay(
+                                  _buildControls(context, compact: isLandscape),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        Positioned(
-                          left: 0,
-                          right: 0,
-                          bottom: 0,
-                          child: _controlsOverlay(
-                            _buildControls(context, compact: isLandscape),
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ),
-          );
-        },
+              );
+            },
+          ),
+        ),
       ),
     );
   }
@@ -765,6 +790,13 @@ class _StreamPlayerPageState extends State<StreamPlayerPage> {
 
   void _handlePointerDown(PointerDownEvent event) {
     if (_controlsVisible) _controlsTimer?.cancel();
+  }
+
+  void _handlePointerHover(PointerHoverEvent event) {
+    if (!_controlsVisible && !_loading && _error == null) {
+      setState(() => _controlsVisible = true);
+    }
+    _scheduleControlsHide();
   }
 
   void _toggleControls() {
@@ -800,6 +832,44 @@ class _StreamPlayerPageState extends State<StreamPlayerPage> {
       }
       setState(() => _controlsVisible = false);
     });
+  }
+
+  Future<void> _seekBy(Duration offset) async {
+    final duration = _player.state.duration;
+    if (duration <= Duration.zero) return;
+    final target = (_player.state.position + offset).inMilliseconds.clamp(
+      0,
+      duration.inMilliseconds,
+    );
+    await _player.seek(Duration(milliseconds: target));
+  }
+
+  void _showKeyboardShortcuts() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Keyboard shortcuts'),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Space or K  ·  Play / pause'),
+            SizedBox(height: 8),
+            Text('← or J  ·  Back 10 seconds'),
+            SizedBox(height: 8),
+            Text('→ or L  ·  Forward 10 seconds'),
+            SizedBox(height: 8),
+            Text('Esc  ·  Close player'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
   }
 
   ThemeData _playerTheme(ThemeData base) {
@@ -882,6 +952,11 @@ class _StreamPlayerPageState extends State<StreamPlayerPage> {
             tooltip: 'Back',
             onPressed: _close,
             icon: const Icon(Icons.arrow_back_rounded),
+          ),
+          IconButton(
+            tooltip: 'Keyboard shortcuts',
+            onPressed: _showKeyboardShortcuts,
+            icon: const Icon(Icons.keyboard_outlined),
           ),
           const SizedBox(width: 4),
           Expanded(

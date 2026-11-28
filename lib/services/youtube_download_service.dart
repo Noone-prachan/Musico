@@ -14,6 +14,7 @@ import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
 import '../models/youtube_download.dart';
 import '../models/youtube_media.dart';
+import 'lyrics_title_matcher.dart';
 
 class YouTubeDownloadOutcome {
   const YouTubeDownloadOutcome({
@@ -137,6 +138,7 @@ class YouTubeDownloadService {
     String? videoId,
     required String title,
     required String artist,
+    int durationMs = 0,
   }) async {
     try {
       var resolvedId = videoId?.trim();
@@ -150,7 +152,29 @@ class YouTubeDownloadService {
         if (query.isEmpty) return null;
         final results = await _youtube.search.search(query);
         if (results.isEmpty) return null;
-        resolvedId = results.first.id.value;
+        final matches = results
+            .where(
+              (result) =>
+                  !result.isLive &&
+                  lyricsSearchTitleMatches(title, result.title),
+            )
+            .toList();
+        if (matches.isEmpty) return null;
+        matches.sort((a, b) {
+          final aExact = lyricsTitleMatches(title, a.title) ? 0 : 1;
+          final bExact = lyricsTitleMatches(title, b.title) ? 0 : 1;
+          final titleOrder = aExact.compareTo(bExact);
+          if (titleOrder != 0) return titleOrder;
+          if (durationMs <= 0) return 0;
+          final aDuration = a.duration == null
+              ? double.infinity
+              : (a.duration!.inMilliseconds - durationMs).abs().toDouble();
+          final bDuration = b.duration == null
+              ? double.infinity
+              : (b.duration!.inMilliseconds - durationMs).abs().toDouble();
+          return aDuration.compareTo(bDuration);
+        });
+        resolvedId = matches.first.id.value;
       }
       final manifest = await _youtube.videos.closedCaptions.getManifest(
         resolvedId,

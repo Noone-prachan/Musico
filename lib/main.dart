@@ -782,16 +782,11 @@ class _MusicoHomeState extends State<_MusicoHome> {
   void _selectPage(int index) {
     if (index < 0 || index >= _pageCount) return;
     if (index == _selectedPage) {
-      final controller = PrimaryScrollController.maybeOf(context);
-      if (controller != null && controller.hasClients) {
-        unawaited(
-          controller.animateTo(
-            0,
-            duration: const Duration(milliseconds: 260),
-            curve: Curves.easeOutCubic,
-          ),
-        );
-      }
+      setState(() {
+        _watchSeed = null;
+        _watchSeedTick++;
+      });
+      if (index == 2) unawaited(_appState.refreshAnime(silent: true));
       return;
     }
     setState(() {
@@ -836,7 +831,9 @@ class _MusicoHomeState extends State<_MusicoHome> {
           onPopInvokedWithResult: (didPop, _) {
             if (!didPop && _selectedPage != 0) {
               Future.microtask(() {
-                if (!streamingChildHandledPop && mounted && _selectedPage != 0) {
+                if (!streamingChildHandledPop &&
+                    mounted &&
+                    _selectedPage != 0) {
                   _selectPage(0);
                 }
                 streamingChildHandledPop = false;
@@ -844,152 +841,155 @@ class _MusicoHomeState extends State<_MusicoHome> {
             }
           },
           child: Scaffold(
-          body: SafeArea(
-            child: desktop
-                ? Row(
-                    children: [
-                      _SideNavigation(
-                        appState: _appState,
-                        selectedIndex: _selectedPage,
-                        onSelected: _selectPage,
-                        onSettings: _openCompactSettings,
-                        desktop: true,
-                      ),
-                      Expanded(
-                        child: Column(
-                          children: [
-                            _TopBar(
-                              isWifiConnected: _appState.isWifiConnected,
-                              hasNetworkConnection:
-                                  _appState.hasNetworkConnection,
-                              desktop: true,
-                            ),
-                            if (_startupError != null)
-                              _StartupError(message: _startupError!),
-                            Expanded(child: _currentScreen()),
-                            if (showAudioDock) PlayerDock(appState: _appState),
-                          ],
+            body: SafeArea(
+              child: desktop
+                  ? Row(
+                      children: [
+                        _SideNavigation(
+                          appState: _appState,
+                          selectedIndex: _selectedPage,
+                          onSelected: _selectPage,
+                          onSettings: _openCompactSettings,
+                          desktop: true,
                         ),
-                      ),
-                    ],
-                  )
-                : Column(
-                    children: [
-                      _TopBar(
-                        isWifiConnected: _appState.isWifiConnected,
-                        hasNetworkConnection: _appState.hasNetworkConnection,
-                        onSettingsPressed: rail ? null : _openCompactSettings,
-                      ),
-                      if (_startupError != null)
-                        _StartupError(message: _startupError!),
-                      Expanded(
-                        child: Row(
-                          children: [
-                            if (rail)
-                              _SideNavigation(
-                                appState: _appState,
-                                selectedIndex: _selectedPage,
-                                onSelected: _selectPage,
-                                onSettings: _openCompactSettings,
-                                desktop: false,
+                        Expanded(
+                          child: Column(
+                            children: [
+                              _TopBar(
+                                isWifiConnected: _appState.isWifiConnected,
+                                hasNetworkConnection:
+                                    _appState.hasNetworkConnection,
+                                desktop: true,
                               ),
-                            Expanded(child: _currentScreen()),
-                          ],
+                              if (_startupError != null)
+                                _StartupError(message: _startupError!),
+                              Expanded(child: _currentScreen()),
+                              if (showAudioDock)
+                                PlayerDock(appState: _appState),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-          ),
-          bottomNavigationBar: desktop
-              ? null
-              : SafeArea(
-                  top: false,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (showAudioDock)
-                        PlayerDock(appState: _appState, compact: true),
-                      if (!rail)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 5, 12, 8),
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: MusicoPalette.canvasAlt,
-                              borderRadius: BorderRadius.circular(22),
-                              border: Border.all(color: MusicoPalette.line),
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(22),
-                              child: NavigationBar(
-                                selectedIndex: switch (_selectedPage) {
-                                  0 => 0,
-                                  1 => 1,
-                                  2 => 2,
-                                  3 => 3,
-                                  4 => 4,
-                                  _ => 5,
-                                },
-                                onDestinationSelected: (index) =>
-                                    _selectPage(switch (index) {
-                                      0 => 0,
-                                      1 => 1,
-                                      2 => 2,
-                                      3 => 3,
-                                      4 => 4,
-                                      _ => 8,
-                                    }),
-                                height: 62,
-                                backgroundColor: Colors.transparent,
-                                indicatorColor: MusicoPalette.clayLight,
-                                labelBehavior:
-                                    NavigationDestinationLabelBehavior
-                                        .onlyShowSelected,
-                                destinations: const [
-                                  NavigationDestination(
-                                    icon: Icon(Icons.home_outlined),
-                                    selectedIcon: Icon(Icons.home_rounded),
-                                    label: 'Home',
-                                  ),
-                                  NavigationDestination(
-                                    icon: Icon(Icons.library_music_outlined),
-                                    selectedIcon: Icon(
-                                      Icons.library_music_outlined,
+                      ],
+                    )
+                  : Column(
+                      children: [
+                        _TopBar(
+                          isWifiConnected: _appState.isWifiConnected,
+                          hasNetworkConnection: _appState.hasNetworkConnection,
+                          onSettingsPressed: rail ? null : _openCompactSettings,
+                        ),
+                        if (_startupError != null)
+                          _StartupError(message: _startupError!),
+                        Expanded(
+                          child: Row(
+                            children: [
+                              if (rail)
+                                _SideNavigation(
+                                  appState: _appState,
+                                  selectedIndex: _selectedPage,
+                                  onSelected: _selectPage,
+                                  onSettings: _openCompactSettings,
+                                  desktop: false,
+                                ),
+                              Expanded(child: _currentScreen()),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+            bottomNavigationBar: desktop
+                ? null
+                : SafeArea(
+                    top: false,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (showAudioDock)
+                          PlayerDock(appState: _appState, compact: true),
+                        if (!rail)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 5, 12, 8),
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: MusicoPalette.canvasAlt,
+                                borderRadius: BorderRadius.circular(22),
+                                border: Border.all(color: MusicoPalette.line),
+                              ),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(22),
+                                child: NavigationBar(
+                                  selectedIndex: switch (_selectedPage) {
+                                    0 => 0,
+                                    1 => 1,
+                                    2 => 2,
+                                    3 => 3,
+                                    4 => 4,
+                                    _ => 5,
+                                  },
+                                  onDestinationSelected: (index) =>
+                                      _selectPage(switch (index) {
+                                        0 => 0,
+                                        1 => 1,
+                                        2 => 2,
+                                        3 => 3,
+                                        4 => 4,
+                                        _ => 8,
+                                      }),
+                                  height: 62,
+                                  backgroundColor: Colors.transparent,
+                                  indicatorColor: MusicoPalette.clayLight,
+                                  labelBehavior:
+                                      NavigationDestinationLabelBehavior
+                                          .onlyShowSelected,
+                                  destinations: const [
+                                    NavigationDestination(
+                                      icon: Icon(Icons.home_outlined),
+                                      selectedIcon: Icon(Icons.home_rounded),
+                                      label: 'Home',
                                     ),
-                                    label: 'Songs',
-                                  ),
-                                  NavigationDestination(
-                                    icon: Icon(Icons.ondemand_video_outlined),
-                                    selectedIcon: Icon(
-                                      Icons.ondemand_video_outlined,
+                                    NavigationDestination(
+                                      icon: Icon(Icons.library_music_outlined),
+                                      selectedIcon: Icon(
+                                        Icons.library_music_outlined,
+                                      ),
+                                      label: 'Songs',
                                     ),
-                                    label: 'Anime',
-                                  ),
-                                  NavigationDestination(
-                                    icon: Icon(Icons.live_tv_outlined),
-                                    selectedIcon: Icon(Icons.live_tv_outlined),
-                                    label: 'Series',
-                                  ),
-                                  NavigationDestination(
-                                    icon: Icon(Icons.movie_outlined),
-                                    selectedIcon: Icon(Icons.movie_outlined),
-                                    label: 'Movies',
-                                  ),
-                                  NavigationDestination(
-                                    icon: Icon(Icons.more_horiz_outlined),
-                                    selectedIcon: Icon(
-                                      Icons.more_horiz_outlined,
+                                    NavigationDestination(
+                                      icon: Icon(Icons.ondemand_video_outlined),
+                                      selectedIcon: Icon(
+                                        Icons.ondemand_video_outlined,
+                                      ),
+                                      label: 'Anime',
                                     ),
-                                    label: 'More',
-                                  ),
-                                ],
+                                    NavigationDestination(
+                                      icon: Icon(Icons.live_tv_outlined),
+                                      selectedIcon: Icon(
+                                        Icons.live_tv_outlined,
+                                      ),
+                                      label: 'Series',
+                                    ),
+                                    NavigationDestination(
+                                      icon: Icon(Icons.movie_outlined),
+                                      selectedIcon: Icon(Icons.movie_outlined),
+                                      label: 'Movies',
+                                    ),
+                                    NavigationDestination(
+                                      icon: Icon(Icons.more_horiz_outlined),
+                                      selectedIcon: Icon(
+                                        Icons.more_horiz_outlined,
+                                      ),
+                                      label: 'More',
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-        ),
+          ),
         );
       },
     );
@@ -1030,7 +1030,10 @@ class _MusicoHomeState extends State<_MusicoHome> {
       duration: const Duration(milliseconds: 190),
       switchInCurve: Curves.easeOutCubic,
       switchOutCurve: Curves.easeInCubic,
-      child: KeyedSubtree(key: ValueKey<int>(_selectedPage), child: screen),
+      child: KeyedSubtree(
+        key: ValueKey<String>('$_selectedPage-$_watchSeedTick'),
+        child: screen,
+      ),
     );
   }
 }

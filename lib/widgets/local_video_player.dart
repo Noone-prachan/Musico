@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:media_kit/media_kit.dart' show Player;
 import 'package:media_kit_video/media_kit_video.dart';
@@ -137,6 +138,13 @@ class _MusicoVideoControlsState extends State<_MusicoVideoControls> {
     }
   }
 
+  void _handlePointerHover(PointerHoverEvent event) {
+    if (!_controlsVisible && _player.state.playing) {
+      setState(() => _controlsVisible = true);
+    }
+    _scheduleHide();
+  }
+
   Future<void> _runControl(
     Future<void> Function() action,
     String failureMessage,
@@ -166,6 +174,36 @@ class _MusicoVideoControlsState extends State<_MusicoVideoControls> {
     );
   }
 
+  void _showKeyboardShortcuts() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Keyboard shortcuts'),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Space or K  ·  Play / pause'),
+            SizedBox(height: 8),
+            Text('← or J  ·  Back 10 seconds'),
+            SizedBox(height: 8),
+            Text('→ or L  ·  Forward 10 seconds'),
+            SizedBox(height: 8),
+            Text('F  ·  Toggle full screen'),
+            SizedBox(height: 8),
+            Text('Esc  ·  Stop video'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -179,203 +217,284 @@ class _MusicoVideoControlsState extends State<_MusicoVideoControls> {
             .clamp(0, maxMilliseconds)
             .toDouble();
 
-        return GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: _toggleControls,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              IgnorePointer(
-                ignoring: !_controlsVisible,
-                child: AnimatedOpacity(
-                  opacity: _controlsVisible ? 1 : 0,
-                  duration: const Duration(milliseconds: 180),
-                  child: ColoredBox(
-                    color: Colors.black.withValues(alpha: .2),
-                    child: Column(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 9, 8, 0),
-                          child: Row(
+        return CallbackShortcuts(
+          bindings: <ShortcutActivator, VoidCallback>{
+            const SingleActivator(LogicalKeyboardKey.escape): () =>
+                unawaited(widget.appState.stopVideo()),
+            const SingleActivator(LogicalKeyboardKey.space): () => unawaited(
+              _runControl(
+                () => _player.playOrPause(),
+                'Could not change video playback.',
+              ),
+            ),
+            const SingleActivator(LogicalKeyboardKey.keyK): () => unawaited(
+              _runControl(
+                () => _player.playOrPause(),
+                'Could not change video playback.',
+              ),
+            ),
+            const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
+                unawaited(_seek(const Duration(seconds: -10))),
+            const SingleActivator(LogicalKeyboardKey.keyJ): () =>
+                unawaited(_seek(const Duration(seconds: -10))),
+            const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
+                unawaited(_seek(const Duration(seconds: 10))),
+            const SingleActivator(LogicalKeyboardKey.keyL): () =>
+                unawaited(_seek(const Duration(seconds: 10))),
+            const SingleActivator(LogicalKeyboardKey.keyF): () => unawaited(
+              _runControl(
+                widget.videoState.toggleFullscreen,
+                'Could not change full-screen mode.',
+              ),
+            ),
+          },
+          child: Focus(
+            autofocus: true,
+            child: MouseRegion(
+              cursor:
+                  Platform.isWindows &&
+                      !_controlsVisible &&
+                      _player.state.playing
+                  ? SystemMouseCursors.none
+                  : SystemMouseCursors.basic,
+              onHover: _handlePointerHover,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _toggleControls,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    IgnorePointer(
+                      ignoring: !_controlsVisible,
+                      child: AnimatedOpacity(
+                        opacity: _controlsVisible ? 1 : 0,
+                        duration: const Duration(milliseconds: 180),
+                        child: ColoredBox(
+                          color: Colors.black.withValues(alpha: .2),
+                          child: Column(
                             children: [
-                              Expanded(
-                                child: Text(
-                                  widget.video.title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(context).textTheme.labelLarge
-                                      ?.copyWith(color: MusicoPalette.paper),
-                                ),
-                              ),
-                              if (widget.video.quality case final quality?)
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 8),
-                                  child: Text(
-                                    quality,
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .labelSmall
-                                        ?.copyWith(color: MusicoPalette.paper),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          child: Center(
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  tooltip: 'Back 10 seconds',
-                                  onPressed: () => unawaited(
-                                    _seek(const Duration(seconds: -10)),
-                                  ),
-                                  color: MusicoPalette.paper,
-                                  icon: const Icon(Icons.replay_10_rounded),
-                                ),
-                                const SizedBox(width: 8),
-                                IconButton.filled(
-                                  tooltip: _player.state.playing
-                                      ? 'Pause'
-                                      : 'Play',
-                                  onPressed: () => unawaited(
-                                    _runControl(
-                                      () => _player.playOrPause(),
-                                      'Could not change video playback.',
-                                    ),
-                                  ),
-                                  style: IconButton.styleFrom(
-                                    backgroundColor: MusicoPalette.forest,
-                                    foregroundColor: MusicoPalette.paper,
-                                  ),
-                                  iconSize: 32,
-                                  icon: Icon(
-                                    _player.state.playing
-                                        ? Icons.pause_rounded
-                                        : Icons.play_arrow_rounded,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                IconButton(
-                                  tooltip: 'Forward 10 seconds',
-                                  onPressed: () => unawaited(
-                                    _seek(const Duration(seconds: 10)),
-                                  ),
-                                  color: MusicoPalette.paper,
-                                  icon: const Icon(Icons.forward_10_rounded),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        ColoredBox(
-                          color: Colors.black.withValues(alpha: .76),
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(10, 0, 4, 3),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (_controlError != null)
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 5),
-                                    child: Text(
-                                      _controlError!,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                            color: MusicoPalette.paper,
-                                          ),
-                                    ),
-                                  ),
-                                Row(
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(12, 9, 8, 0),
+                                child: Row(
                                   children: [
-                                    Text(
-                                      _formatVideoTime(position),
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .labelSmall
-                                          ?.copyWith(
-                                            color: MusicoPalette.paper,
-                                            fontFeatures: const [
-                                              FontFeature.tabularFigures(),
-                                            ],
-                                          ),
-                                    ),
                                     Expanded(
-                                      child: SliderTheme(
-                                        data: SliderTheme.of(context).copyWith(
-                                          activeTrackColor: MusicoPalette.olive,
-                                          inactiveTrackColor: MusicoPalette
-                                              .paper
-                                              .withValues(alpha: .38),
-                                          thumbColor: MusicoPalette.paper,
-                                          overlayColor: MusicoPalette.olive
-                                              .withValues(alpha: .18),
-                                          trackHeight: 3,
-                                        ),
-                                        child: Slider(
-                                          min: 0,
-                                          max: maxMilliseconds.toDouble(),
-                                          value: currentMilliseconds,
-                                          onChanged: hasDuration
-                                              ? (value) => unawaited(
-                                                  _runControl(
-                                                    () => _player.seek(
-                                                      Duration(
-                                                        milliseconds: value
-                                                            .round(),
-                                                      ),
-                                                    ),
-                                                    'Could not seek this video.',
-                                                  ),
-                                                )
-                                              : null,
-                                        ),
+                                      child: Text(
+                                        widget.video.title,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelLarge
+                                            ?.copyWith(
+                                              color: MusicoPalette.paper,
+                                            ),
                                       ),
                                     ),
-                                    Text(
-                                      _formatVideoTime(duration),
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .labelSmall
-                                          ?.copyWith(
-                                            color: MusicoPalette.paper,
-                                            fontFeatures: const [
-                                              FontFeature.tabularFigures(),
-                                            ],
-                                          ),
-                                    ),
+                                    if (widget.video.quality
+                                        case final quality?)
+                                      Padding(
+                                        padding: const EdgeInsets.only(left: 8),
+                                        child: Text(
+                                          quality,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .labelSmall
+                                              ?.copyWith(
+                                                color: MusicoPalette.paper,
+                                              ),
+                                        ),
+                                      ),
                                     IconButton(
-                                      tooltip: widget.videoState.isFullscreen()
-                                          ? 'Exit full screen'
-                                          : 'Full screen',
-                                      onPressed: () => unawaited(
-                                        _runControl(
-                                          widget.videoState.toggleFullscreen,
-                                          'Could not change full-screen mode.',
-                                        ),
-                                      ),
+                                      tooltip: 'Keyboard shortcuts',
+                                      onPressed: _showKeyboardShortcuts,
                                       color: MusicoPalette.paper,
-                                      icon: Icon(
-                                        widget.videoState.isFullscreen()
-                                            ? Icons.fullscreen_exit_rounded
-                                            : Icons.fullscreen_rounded,
+                                      icon: const Icon(
+                                        Icons.keyboard_outlined,
+                                        size: 18,
                                       ),
                                     ),
                                   ],
                                 ),
-                              ],
-                            ),
+                              ),
+                              Expanded(
+                                child: Center(
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                        tooltip: 'Back 10 seconds',
+                                        onPressed: () => unawaited(
+                                          _seek(const Duration(seconds: -10)),
+                                        ),
+                                        color: MusicoPalette.paper,
+                                        icon: const Icon(
+                                          Icons.replay_10_rounded,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      IconButton.filled(
+                                        tooltip: _player.state.playing
+                                            ? 'Pause'
+                                            : 'Play',
+                                        onPressed: () => unawaited(
+                                          _runControl(
+                                            () => _player.playOrPause(),
+                                            'Could not change video playback.',
+                                          ),
+                                        ),
+                                        style: IconButton.styleFrom(
+                                          backgroundColor: MusicoPalette.forest,
+                                          foregroundColor: MusicoPalette.paper,
+                                        ),
+                                        iconSize: 32,
+                                        icon: Icon(
+                                          _player.state.playing
+                                              ? Icons.pause_rounded
+                                              : Icons.play_arrow_rounded,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      IconButton(
+                                        tooltip: 'Forward 10 seconds',
+                                        onPressed: () => unawaited(
+                                          _seek(const Duration(seconds: 10)),
+                                        ),
+                                        color: MusicoPalette.paper,
+                                        icon: const Icon(
+                                          Icons.forward_10_rounded,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              ColoredBox(
+                                color: Colors.black.withValues(alpha: .76),
+                                child: Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    10,
+                                    0,
+                                    4,
+                                    3,
+                                  ),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (_controlError != null)
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                            top: 5,
+                                          ),
+                                          child: Text(
+                                            _controlError!,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodySmall
+                                                ?.copyWith(
+                                                  color: MusicoPalette.paper,
+                                                ),
+                                          ),
+                                        ),
+                                      Row(
+                                        children: [
+                                          Text(
+                                            _formatVideoTime(position),
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .labelSmall
+                                                ?.copyWith(
+                                                  color: MusicoPalette.paper,
+                                                  fontFeatures: const [
+                                                    FontFeature.tabularFigures(),
+                                                  ],
+                                                ),
+                                          ),
+                                          Expanded(
+                                            child: SliderTheme(
+                                              data: SliderTheme.of(context)
+                                                  .copyWith(
+                                                    activeTrackColor:
+                                                        MusicoPalette.olive,
+                                                    inactiveTrackColor:
+                                                        MusicoPalette.paper
+                                                            .withValues(
+                                                              alpha: .38,
+                                                            ),
+                                                    thumbColor:
+                                                        MusicoPalette.paper,
+                                                    overlayColor: MusicoPalette
+                                                        .olive
+                                                        .withValues(alpha: .18),
+                                                    trackHeight: 3,
+                                                  ),
+                                              child: Slider(
+                                                min: 0,
+                                                max: maxMilliseconds.toDouble(),
+                                                value: currentMilliseconds,
+                                                onChanged: hasDuration
+                                                    ? (value) => unawaited(
+                                                        _runControl(
+                                                          () => _player.seek(
+                                                            Duration(
+                                                              milliseconds:
+                                                                  value.round(),
+                                                            ),
+                                                          ),
+                                                          'Could not seek this video.',
+                                                        ),
+                                                      )
+                                                    : null,
+                                              ),
+                                            ),
+                                          ),
+                                          Text(
+                                            _formatVideoTime(duration),
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .labelSmall
+                                                ?.copyWith(
+                                                  color: MusicoPalette.paper,
+                                                  fontFeatures: const [
+                                                    FontFeature.tabularFigures(),
+                                                  ],
+                                                ),
+                                          ),
+                                          IconButton(
+                                            tooltip:
+                                                widget.videoState.isFullscreen()
+                                                ? 'Exit full screen'
+                                                : 'Full screen',
+                                            onPressed: () => unawaited(
+                                              _runControl(
+                                                widget
+                                                    .videoState
+                                                    .toggleFullscreen,
+                                                'Could not change full-screen mode.',
+                                              ),
+                                            ),
+                                            color: MusicoPalette.paper,
+                                            icon: Icon(
+                                              widget.videoState.isFullscreen()
+                                                  ? Icons
+                                                        .fullscreen_exit_rounded
+                                                  : Icons.fullscreen_rounded,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ],
+                      ),
                     ),
-                  ),
+                  ],
                 ),
               ),
-            ],
+            ),
           ),
         );
       },

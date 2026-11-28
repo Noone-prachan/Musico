@@ -2445,6 +2445,7 @@ class AppState extends ChangeNotifier {
               videoId: video?.videoId,
               title: metadata.$1,
               artist: metadata.$2,
+              durationMs: metadata.$3,
             )
             .timeout(const Duration(seconds: 15), onTimeout: () => null);
         if (requestId != _lyricsRequestId) return;
@@ -2468,30 +2469,19 @@ class AppState extends ChangeNotifier {
         lyricsStatus = LyricsStatus.notFound;
         return;
       }
-      var lines = content.syncedLines;
-      final recordDurationSec = payload['duration'];
       final trackDurationMs = metadata.$3;
-      if (lines.isNotEmpty &&
-          recordDurationSec is num &&
-          recordDurationSec > 0 &&
-          trackDurationMs > 0) {
-        final diffMs = trackDurationMs - (recordDurationSec * 1000).round();
-        if (diffMs.abs() > 3000 && diffMs > 0) {
-          lines = [
-            for (final line in lines)
-              SyncedLyricLine(
-                timestamp: Duration(
-                  milliseconds: (line.timestamp.inMilliseconds + diffMs)
-                      .clamp(0, trackDurationMs),
-                ),
-                text: line.text,
+      final recordDurationSec = payload['duration'];
+      final lines = recordDurationSec is num
+          ? alignSyncedLyricsToDuration(
+              content.syncedLines,
+              sourceDuration: Duration(
+                milliseconds: (recordDurationSec * 1000).round(),
               ),
-          ];
-        }
-      }
+              targetDuration: Duration(milliseconds: trackDurationMs),
+            )
+          : content.syncedLines;
       lyrics = content.text;
       syncedLyricLines = lines;
-      syncedLyricLines = content.syncedLines;
       lyricsStatus = LyricsStatus.loaded;
     } on TimeoutException catch (error, stackTrace) {
       if (requestId != _lyricsRequestId) return;
@@ -2542,7 +2532,7 @@ class AppState extends ChangeNotifier {
       if (exact.statusCode == 200) {
         final record = jsonDecode(exact.body) as Map<String, dynamic>;
         if (hasSyncedLyricsRecord(record)) return record;
-        exactFallback = record;
+        if (hasLyricsRecord(record)) exactFallback = record;
       } else if (exact.statusCode != 404) {
         throw HttpException('The lyrics service returned ${exact.statusCode}.');
       }
@@ -2596,17 +2586,16 @@ class AppState extends ChangeNotifier {
 
   (String, String, int) _videoLyricsMetadata(VideoTrack video) {
     final name = video.title;
+    final durationMs = video.durationMs > 0
+        ? video.durationMs
+        : videoPlayer.state.duration.inMilliseconds;
     final separator = RegExp(r'\s[-–—]\s').firstMatch(name);
     if (separator == null) {
-      return (name, '', videoPlayer.state.duration.inMilliseconds);
+      return (name, '', durationMs);
     }
     final artist = name.substring(0, separator.start).trim();
     final title = name.substring(separator.end).trim();
-    return (
-      title.isEmpty ? name : title,
-      artist,
-      videoPlayer.state.duration.inMilliseconds,
-    );
+    return (title.isEmpty ? name : title, artist, durationMs);
   }
 
   Future<void> setVolume(double value) async {

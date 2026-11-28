@@ -12,3 +12,14 @@ String normalizeLyricsTitle(String value) {
 bool lyricsTitleMatches(String requestedTitle, String candidateTitle) =>
     normalizeLyricsTitle(requestedTitle).toLowerCase() ==
     normalizeLyricsTitle(candidateTitle).toLowerCase();
+
+bool lyricsSearchTitleMatches(String requestedTitle, String candidateTitle) {
+  final normalizedTitle = normalizeLyricsTitle(requestedTitle).trim();
+  final normalizedCandidate = normalizeLyricsTitle(candidateTitle).trim();
+  if (normalizedTitle.isEmpty || normalizedCandidate.isEmpty) return false;
+  if (lyricsTitleMatches(normalizedTitle, normalizedCandidate)) return true;
+
+  final pattern =
+      r'(^|[^a-z0-9])' + RegExp.escape(normalizedTitle) + r'([^a-z0-9]|$)';
+  return RegExp(pattern, caseSensitive: false).hasMatch(normalizedCandidate);
+}

@@ -18,5 +18,16 @@ void main() {
       expect(lyricsTitleMatches('Firfirey Official Audio', 'Firfirey'), isTrue);
       expect(lyricsTitleMatches('Firfirey Live', 'Firfirey'), isFalse);
     });
+
+    test('matches a song title within a video title without partial words', () {
+      expect(
+        lyricsSearchTitleMatches(
+          'Perfect',
+          'Ed Sheeran - Perfect (Official Music Video)',
+        ),
+        isTrue,
+      );
+      expect(lyricsSearchTitleMatches('Perfect', 'Perfectly Yours'), isFalse);
+    });
   });
 }

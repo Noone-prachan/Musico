@@ -63,6 +63,61 @@ void main() {
       },
     );
 
+    test('selects the closest track duration from search results', () {
+      final records = [
+        {
+          'trackName': 'Firfirey',
+          'artistName': 'Artist',
+          'duration': 240,
+          'syncedLyrics': '[00:01.00]Wrong version',
+        },
+        {
+          'trackName': 'Firfirey',
+          'artistName': 'Artist',
+          'duration': 181,
+          'syncedLyrics': '[00:01.00]Best match',
+        },
+        {
+          'trackName': 'Firfirey',
+          'artistName': 'Artist',
+          'duration': 180,
+          'plainLyrics': 'Closest but not timed',
+        },
+      ];
+
+      expect(
+        selectLyricsRecord(
+          records,
+          title: 'Firfirey',
+          artist: 'Artist',
+          durationSeconds: 180,
+        ),
+        same(records.last),
+      );
+    });
+
+    test('skips closer search results without lyrics', () {
+      final records = [
+        {'trackName': 'Firfirey', 'artistName': 'Artist', 'duration': 180},
+        {
+          'trackName': 'Firfirey',
+          'artistName': 'Artist',
+          'duration': 183,
+          'syncedLyrics': '[00:01.00]Lyrics',
+        },
+      ];
+
+      expect(
+        selectLyricsRecord(
+          records,
+          title: 'Firfirey',
+          artist: 'Artist',
+          durationSeconds: 180,
+        ),
+        same(records.last),
+      );
+    });
+
     test('returns null when the known artist does not match', () {
       expect(
         selectLyricsRecord(

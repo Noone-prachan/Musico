@@ -45,6 +45,42 @@ void main() {
     expect(currentSyncedLyricIndex(lines, const Duration(seconds: 4)), 1);
   });
 
+  test('scales lyric timestamps to match a different track duration', () {
+    final lines = parseSyncedLyrics(
+      '[00:30.00]First line\n[02:00.00]Last line',
+    );
+
+    final aligned = alignSyncedLyricsToDuration(
+      lines,
+      sourceDuration: const Duration(minutes: 3),
+      targetDuration: const Duration(minutes: 2),
+    );
+
+    expect(aligned[0].timestamp, const Duration(seconds: 20));
+    expect(aligned[1].timestamp, const Duration(seconds: 80));
+  });
+
+  test('leaves timings alone when durations are close or unavailable', () {
+    final lines = parseSyncedLyrics('[00:30.00]Line');
+
+    expect(
+      alignSyncedLyricsToDuration(
+        lines,
+        sourceDuration: const Duration(minutes: 3),
+        targetDuration: const Duration(minutes: 3, seconds: 2),
+      ),
+      same(lines),
+    );
+    expect(
+      alignSyncedLyricsToDuration(
+        lines,
+        sourceDuration: Duration.zero,
+        targetDuration: const Duration(minutes: 2),
+      ),
+      same(lines),
+    );
+  });
+
   test('ignores malformed timestamps and empty lines', () {
     final lines = parseSyncedLyrics(
       '[00:99.00]Invalid seconds\n'

@@ -108,6 +108,7 @@ class _AnimeTabState extends State<AnimeTab> {
   final StreamWatchProgressService _progressService =
       StreamWatchProgressService();
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _resultsScrollController = ScrollController();
 
   List<AnimeSearchResult> _results = const [];
   List<StreamWatchProgress> _continueWatching = const [];
@@ -252,6 +253,7 @@ class _AnimeTabState extends State<AnimeTab> {
   void dispose() {
     _catalog.removeListener(_handleCatalogChange);
     _searchController.dispose();
+    _resultsScrollController.dispose();
     super.dispose();
   }
 
@@ -271,6 +273,9 @@ class _AnimeTabState extends State<AnimeTab> {
     }
     if (query != null) _searchController.text = query;
     FocusManager.instance.primaryFocus?.unfocus();
+    if (_resultsScrollController.hasClients) {
+      _resultsScrollController.jumpTo(0);
+    }
     setState(() {
       _searching = true;
       _searchError = null;
@@ -316,6 +321,62 @@ class _AnimeTabState extends State<AnimeTab> {
         _searchError = 'The anime catalog could not be reached. ($error)';
       });
     }
+  }
+
+  MediaTitle _watchlistTitleFor(AnimeSearchResult result) {
+    final normalizedTitle = result.title.trim().toLowerCase();
+    final existing = [
+      ...widget.appState.watchlist,
+      ...widget.appState.seasonTitles,
+      ...widget.appState.upcomingTitles,
+    ].where((title) => title.title.trim().toLowerCase() == normalizedTitle);
+    if (existing.isNotEmpty) return existing.first;
+
+    var stableId = 0x811c9dc5;
+    for (final codeUnit in '${_service.id}:${result.slug}'.codeUnits) {
+      stableId = ((stableId ^ codeUnit) * 0x01000193) & 0x7fffffff;
+    }
+    return MediaTitle(
+      id: -stableId - 1,
+      title: result.title,
+      imageUrl: result.posterUrl,
+      format: result.type?.toUpperCase() ?? 'UNKNOWN',
+      status: 'UNKNOWN',
+      season: null,
+      seasonYear: null,
+      genres: const [],
+      startDate: null,
+      episodes: result.episodeCount,
+      airings: const [],
+    );
+  }
+
+  void _toggleAnimeWatchlist(AnimeSearchResult result) {
+    final title = _watchlistTitleFor(result);
+    final isSaved = widget.appState.watchlist.any(
+      (saved) => saved.id == title.id,
+    );
+    unawaited(
+      isSaved
+          ? widget.appState.removeFromWatchlist(title)
+          : widget.appState.addToWatchlist(title),
+    );
+  }
+
+  Widget _buildAnimeResultCard(AnimeSearchResult result) {
+    final watchlistTitle = _watchlistTitleFor(result);
+    final isSaved = widget.appState.watchlist.any(
+      (saved) => saved.id == watchlistTitle.id,
+    );
+    return SizedBox(
+      width: 156,
+      child: _ResultCard(
+        result: result,
+        isSaved: isSaved,
+        onTap: () => _openShow(result),
+        onWatchlistTap: () => _toggleAnimeWatchlist(result),
+      ),
+    );
   }
 
   Future<void> _openShow(AnimeSearchResult show) async {
@@ -421,10 +482,12 @@ class _AnimeTabState extends State<AnimeTab> {
     try {
       final req = await client.postUrl(Uri.parse('https://graphql.anilist.co'));
       req.headers.contentType = ContentType.json;
-      req.write(jsonEncode({
-        'query': r'query ($s: String) { Media(search: $s, type: ANIME) { idMal } }',
-        'variables': {'s': title},
-      }));
+      req.write(
+        jsonEncode({
+          'query': r'query ($s: String) { Media(search: $s, type: ANIME) { idMal } }',
+          'variables': {'s': title},
+        }),
+      );
       final res = await req.close().timeout(const Duration(seconds: 5));
       final body = await res.transform(utf8.decoder).join();
       final decoded = jsonDecode(body) as Map<String, dynamic>;
@@ -700,34 +763,37 @@ class _AnimeTabState extends State<AnimeTab> {
       );
     }
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(18, 24, 18, 30),
-      children: [
-        SectionHeading(
-          title: 'Results for "$_lastQuery"',
-          detail: '${_results.length} titles',
-        ),
-        const SizedBox(height: 14),
-        Wrap(
-          spacing: 16,
-          runSpacing: 22,
-          children: [
-            for (final result in _results)
-              SizedBox(
-                width: 156,
-                child: _ResultCard(
-                  result: result,
-                  onTap: () => _openShow(result),
-                ),
-              ),
-          ],
-        ),
-      ],
+    return Scrollbar(
+      controller: _resultsScrollController,
+      child: ListView(
+        key: const PageStorageKey<String>('anime-search-results'),
+        controller: _resultsScrollController,
+        physics: const ClampingScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(18, 24, 18, 30),
+        children: [
+          SectionHeading(
+            title: 'Results for "$_lastQuery"',
+            detail: '${_results.length} titles',
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 16,
+            runSpacing: 22,
+            children: [
+              for (final result in _results) _buildAnimeResultCard(result),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
   Widget _buildShow(BuildContext context) {
     final show = _show!;
+    final watchlistTitle = _watchlistTitleFor(show);
+    final isSaved = widget.appState.watchlist.any(
+      (saved) => saved.id == watchlistTitle.id,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -792,6 +858,23 @@ class _AnimeTabState extends State<AnimeTab> {
                           if (!_loadingShow) '${_episodes.length} episodes',
                         ].join(' · '),
                         style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: () => _toggleAnimeWatchlist(show),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(0, 40),
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                        ),
+                        icon: Icon(
+                          isSaved
+                              ? Icons.bookmark_rounded
+                              : Icons.bookmark_add_outlined,
+                          size: 17,
+                        ),
+                        label: Text(
+                          isSaved ? 'Saved to watchlist' : 'Add to watchlist',
+                        ),
                       ),
                       if (_seasons.isNotEmpty || _loadingSeasons) ...[
                         const SizedBox(height: 10),
@@ -986,10 +1069,7 @@ class _AnimeTabState extends State<AnimeTab> {
 }
 
 class _AnimeHeroBanner extends StatelessWidget {
-  const _AnimeHeroBanner({
-    required this.media,
-    required this.onWatchNow,
-  });
+  const _AnimeHeroBanner({required this.media, required this.onWatchNow});
 
   final MediaTitle media;
   final VoidCallback onWatchNow;
@@ -1037,25 +1117,23 @@ class _AnimeHeroBanner extends StatelessWidget {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          height: 1.15,
-                        ),
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      height: 1.15,
+                    ),
                   ),
                   const SizedBox(height: 6),
                   Text(
                     [
                       if (media.format.isNotEmpty) media.format,
-                      if (media.episodes != null)
-                        '${media.episodes} Episodes',
+                      if (media.episodes != null) '${media.episodes} Episodes',
                       if (media.genres.isNotEmpty)
                         media.genres.take(3).join(' · '),
                     ].join('  ·  '),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Colors.white.withValues(alpha: 0.8),
-                        ),
+                    style: Theme.of(context).textTheme.bodySmall
+                        ?.copyWith(color: Colors.white.withValues(alpha: 0.8)),
                   ),
                   const SizedBox(height: 14),
                   FilledButton.icon(
@@ -1293,7 +1371,8 @@ class _ContinueWatchingRail extends StatelessWidget {
                     label:
                         'Continue ${entry.title}, $detail, '
                         '${(entry.playbackProgress * 100).round()} percent watched',
-                    child: InkWell(mouseCursor: SystemMouseCursors.click,
+                    child: InkWell(
+                      mouseCursor: SystemMouseCursors.click,
                       onTap: () => onResume(entry),
                       borderRadius: BorderRadius.circular(12),
                       child: Column(
@@ -1348,10 +1427,17 @@ class _ContinueWatchingRail extends StatelessWidget {
 }
 
 class _ResultCard extends StatelessWidget {
-  const _ResultCard({required this.result, required this.onTap});
+  const _ResultCard({
+    required this.result,
+    required this.isSaved,
+    required this.onTap,
+    required this.onWatchlistTap,
+  });
 
   final AnimeSearchResult result;
+  final bool isSaved;
   final VoidCallback onTap;
+  final VoidCallback onWatchlistTap;
 
   @override
   Widget build(BuildContext context) {
@@ -1359,7 +1445,8 @@ class _ResultCard extends StatelessWidget {
       if (result.subtitleLine.isNotEmpty) result.subtitleLine,
       if (result.episodeCount != null) '${result.episodeCount} eps',
     ].join(' · ');
-    return InkWell(mouseCursor: SystemMouseCursors.click,
+    return InkWell(
+      mouseCursor: SystemMouseCursors.click,
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
       child: Column(
@@ -1395,6 +1482,14 @@ class _ResultCard extends StatelessWidget {
                     size: 20,
                     color: MusicoPalette.canvas,
                   ),
+                ),
+              ),
+              Positioned(
+                top: 6,
+                right: 6,
+                child: _WatchlistPosterButton(
+                  isSaved: isSaved,
+                  onPressed: onWatchlistTap,
                 ),
               ),
             ],
@@ -1464,7 +1559,8 @@ class _AnimeTitleSection extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    InkWell(mouseCursor: SystemMouseCursors.click,
+                    InkWell(
+                      mouseCursor: SystemMouseCursors.click,
                       onTap: () => onOpen(media),
                       borderRadius: BorderRadius.circular(12),
                       child: Column(
@@ -1572,10 +1668,7 @@ Future<List<WatchTitle>> _loadWatchSuggestions(
 }
 
 class _WatchHeroBanner extends StatelessWidget {
-  const _WatchHeroBanner({
-    required this.title,
-    required this.onWatchNow,
-  });
+  const _WatchHeroBanner({required this.title, required this.onWatchNow});
 
   final WatchTitle title;
   final VoidCallback onWatchNow;
@@ -1623,10 +1716,10 @@ class _WatchHeroBanner extends StatelessWidget {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          height: 1.15,
-                        ),
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      height: 1.15,
+                    ),
                   ),
                   if (title.subtitleLine.isNotEmpty) ...[
                     const SizedBox(height: 6),
@@ -1635,8 +1728,8 @@ class _WatchHeroBanner extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Colors.white.withValues(alpha: 0.8),
-                          ),
+                        color: Colors.white.withValues(alpha: 0.8),
+                      ),
                     ),
                   ],
                   const SizedBox(height: 14),
@@ -1664,6 +1757,7 @@ class _WatchTitleRail extends StatelessWidget {
     required this.title,
     required this.detail,
     required this.titles,
+    required this.appState,
     required this.isLoading,
     required this.onOpen,
     this.trailing,
@@ -1672,6 +1766,7 @@ class _WatchTitleRail extends StatelessWidget {
   final String title;
   final String detail;
   final List<WatchTitle> titles;
+  final AppState appState;
   final bool isLoading;
   final ValueChanged<WatchTitle> onOpen;
   final Widget? trailing;
@@ -1692,19 +1787,42 @@ class _WatchTitleRail extends StatelessWidget {
               separatorBuilder: (_, _) => const SizedBox(width: 14),
               itemBuilder: (context, index) {
                 final item = titles[index];
+                final watchlistTitle = _watchlistMediaForTitle(item);
+                final isSaved = appState.watchlist.any(
+                  (saved) => saved.id == watchlistTitle.id,
+                );
                 return SizedBox(
                   width: 142,
-                  child: InkWell(mouseCursor: SystemMouseCursors.click,
+                  child: InkWell(
+                    mouseCursor: SystemMouseCursors.click,
                     onTap: () => onOpen(item),
                     borderRadius: BorderRadius.circular(12),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        PosterArtwork(
-                          imageUrl: item.posterUrl,
-                          title: item.title,
-                          width: 142,
-                          height: 180,
+                        Stack(
+                          children: [
+                            PosterArtwork(
+                              imageUrl: item.posterUrl,
+                              title: item.title,
+                              width: 142,
+                              height: 180,
+                            ),
+                            Positioned(
+                              top: 6,
+                              right: 6,
+                              child: _WatchlistPosterButton(
+                                isSaved: isSaved,
+                                onPressed: () => unawaited(
+                                  isSaved
+                                      ? appState.removeFromWatchlist(
+                                          watchlistTitle,
+                                        )
+                                      : appState.addToWatchlist(watchlistTitle),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 7),
                         Text(
@@ -1795,7 +1913,8 @@ class _SeasonPremiereRail extends StatelessWidget {
                 final airdate = DateTime.parse(premiere.episode.airdate!);
                 return SizedBox(
                   width: 142,
-                  child: InkWell(mouseCursor: SystemMouseCursors.click,
+                  child: InkWell(
+                    mouseCursor: SystemMouseCursors.click,
                     onTap: () => onOpen(premiere.show),
                     borderRadius: BorderRadius.circular(12),
                     child: Column(
@@ -2239,7 +2358,9 @@ class _ImdbTabState extends State<ImdbTab> {
           final req = await client.headUrl(Uri.parse(url));
           final res = await req.close().timeout(const Duration(seconds: 4));
           await res.drain<void>();
-          if (res.statusCode >= 200 && res.statusCode < 400 && !completer.isCompleted) {
+          if (res.statusCode >= 200 &&
+              res.statusCode < 400 &&
+              !completer.isCompleted) {
             completer.complete(url);
           }
         } on Object {
@@ -2627,6 +2748,7 @@ class _ImdbTabState extends State<ImdbTab> {
             title: widget.series ? 'Featured TV shows' : 'Featured movies',
             detail: 'Suggested titles · metadata from IMDb',
             titles: _featuredTitles,
+            appState: widget.appState,
             isLoading: _loadingFeatured,
             onOpen: (title) => unawaited(_openTitle(title)),
             trailing: IconButton(
@@ -2687,17 +2809,30 @@ class _ImdbTabState extends State<ImdbTab> {
           spacing: 16,
           runSpacing: 22,
           children: [
-            for (final result in _results)
-              SizedBox(
-                width: 148,
-                child: _WatchResultCard(
-                  title: result,
-                  onTap: () => _openTitle(result),
-                ),
-              ),
+            for (final result in _results) _buildWatchResultCard(result),
           ],
         ),
       ],
+    );
+  }
+
+  Widget _buildWatchResultCard(WatchTitle title) {
+    final watchlistTitle = _watchlistMediaForTitle(title);
+    final isSaved = widget.appState.watchlist.any(
+      (saved) => saved.id == watchlistTitle.id,
+    );
+    return SizedBox(
+      width: 148,
+      child: _WatchResultCard(
+        title: title,
+        isSaved: isSaved,
+        onTap: () => _openTitle(title),
+        onWatchlistTap: () => unawaited(
+          isSaved
+              ? widget.appState.removeFromWatchlist(watchlistTitle)
+              : widget.appState.addToWatchlist(watchlistTitle),
+        ),
+      ),
     );
   }
 
@@ -2707,210 +2842,212 @@ class _ImdbTabState extends State<ImdbTab> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
-          child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: MusicoPalette.surface,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: MusicoPalette.glassStrong),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    PosterArtwork(
-                      imageUrl: title.posterUrl,
-                      title: title.title,
-                      width: 96,
-                      height: 134,
-                      rounded: 12,
-                    ),
-                    const SizedBox(height: 8),
-                    Builder(
-                      builder: (context) {
-                        final watchMedia = MediaTitle(
-                          id: title.tmdbId ?? title.imdbId.hashCode,
-                          title: title.title,
-                          status: 'FINISHED',
-                          season: null,
-                          format: title.isSeries ? 'TV' : 'MOVIE',
-                          seasonYear: title.year,
-                          imageUrl: title.posterUrl,
-                          genres: const [],
-                          startDate: null,
-                          episodes: null,
-                          airings: const [],
-                        );
-                        final isSaved = widget.appState.watchlist.any(
-                          (saved) => saved.id == watchMedia.id,
-                        );
-                        return SizedBox(
-                          width: 96,
-                          child: OutlinedButton.icon(
-                            onPressed: () => unawaited(
-                              isSaved
-                                  ? widget.appState.removeFromWatchlist(watchMedia)
-                                  : widget.appState.addToWatchlist(watchMedia),
-                            ),
-                            style: OutlinedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(horizontal: 6),
-                              minimumSize: const Size(0, 34),
-                            ),
-                            icon: Icon(
-                              isSaved
-                                  ? Icons.bookmark_rounded
-                                  : Icons.bookmark_add_outlined,
-                              size: 16,
-                            ),
-                            label: Text(
-                              isSaved ? 'Saved' : 'Watchlist',
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 0),
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: MusicoPalette.surface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: MusicoPalette.glassStrong),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      TextButton.icon(
-                        onPressed: () => setState(() {
-                          _selected = null;
-                          _titleError = null;
-                        }),
-                        style: TextButton.styleFrom(
-                          padding: EdgeInsets.zero,
-                          minimumSize: const Size(0, 28),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        icon: const Icon(Icons.arrow_back_rounded, size: 16),
-                        label: const Text('Back to search'),
+                      PosterArtwork(
+                        imageUrl: title.posterUrl,
+                        title: title.title,
+                        width: 96,
+                        height: 134,
+                        rounded: 12,
                       ),
-                      const SizedBox(height: 2),
-                      Tooltip(
-                        message: title.title,
-                        child: Text(
-                          title.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleLarge,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        [
-                          if (title.subtitleLine.isNotEmpty) title.subtitleLine,
-                          if (!_loadingTitle && title.isSeries)
-                            '${_episodes.length} episodes',
-                        ].join(' · '),
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          if (title.isMovie)
-                            FilledButton.icon(
-                              onPressed: () => _playMovie(title),
-                              icon: const Icon(Icons.play_arrow_rounded, size: 20),
-                              label: const Text('Play movie'),
-                            ),
-                          if (title.isMovie) const SizedBox(width: 8),
-                          Container(
-                            height: 32,
-                            padding: const EdgeInsets.symmetric(horizontal: 10),
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: MusicoPalette.glassStrong),
-                            ),
-                            child: DropdownButtonHideUnderline(
-                              child: DropdownButton<String>(
-                                value: _embedProvider,
-                                isDense: true,
-                                style: Theme.of(context).textTheme.bodySmall,
-                                iconSize: 18,
-                                borderRadius: BorderRadius.circular(12),
-                                items: const [
-                                  DropdownMenuItem(
-                                    value: 'auto',
-                                    child: Text('Auto'),
-                                  ),
-                                  DropdownMenuItem(
-                                    value: 'vidlink',
-                                    child: Text('VidLink'),
-                                  ),
-                                  DropdownMenuItem(
-                                    value: 'vidcore',
-                                    child: Text('VidCore'),
-                                  ),
-                                  DropdownMenuItem(
-                                    value: 'peachify',
-                                    child: Text('Peachify'),
-                                  ),
-                                ],
-                                onChanged: (value) {
-                                  if (value != null) {
-                                    setState(() => _embedProvider = value);
-                                  }
-                                },
+                      const SizedBox(height: 8),
+                      Builder(
+                        builder: (context) {
+                          final watchMedia = _watchlistMediaForTitle(title);
+                          final isSaved = widget.appState.watchlist.any(
+                            (saved) => saved.id == watchMedia.id,
+                          );
+                          return SizedBox(
+                            width: 96,
+                            child: OutlinedButton.icon(
+                              onPressed: () => unawaited(
+                                isSaved
+                                    ? widget.appState.removeFromWatchlist(
+                                        watchMedia,
+                                      )
+                                    : widget.appState.addToWatchlist(
+                                        watchMedia,
+                                      ),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                ),
+                                minimumSize: const Size(0, 34),
+                              ),
+                              icon: Icon(
+                                isSaved
+                                    ? Icons.bookmark_rounded
+                                    : Icons.bookmark_add_outlined,
+                                size: 16,
+                              ),
+                              label: Text(
+                                isSaved ? 'Saved' : 'Watchlist',
+                                style: const TextStyle(fontSize: 12),
                               ),
                             ),
-                          ),
-                        ],
+                          );
+                        },
                       ),
-                      if (!title.isMovie && _loadingTitle)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 8),
-                          child: Text('Loading episodes…'),
-                        )
-                      else if (!title.isMovie && _titleError != null)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: Text(
-                            _titleError!,
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ),
                     ],
                   ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        if (title.isSeries && _seasons.isNotEmpty) ...[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(18, 14, 18, 6),
-            child: SizedBox(
-              height: 36,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                itemCount: _seasons.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 7),
-                itemBuilder: (context, index) {
-                  final season = _seasons[index];
-                  final selected = _season == season;
-                  return ChoiceChip(
-                    label: Text('Season $season'),
-                    selected: selected,
-                    onSelected: (_) => setState(() => _season = season),
-                  );
-                },
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        TextButton.icon(
+                          onPressed: () => setState(() {
+                            _selected = null;
+                            _titleError = null;
+                          }),
+                          style: TextButton.styleFrom(
+                            padding: EdgeInsets.zero,
+                            minimumSize: const Size(0, 28),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          icon: const Icon(Icons.arrow_back_rounded, size: 16),
+                          label: const Text('Back to search'),
+                        ),
+                        const SizedBox(height: 2),
+                        Tooltip(
+                          message: title.title,
+                          child: Text(
+                            title.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          [
+                            if (title.subtitleLine.isNotEmpty)
+                              title.subtitleLine,
+                            if (!_loadingTitle && title.isSeries)
+                              '${_episodes.length} episodes',
+                          ].join(' · '),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            if (title.isMovie)
+                              FilledButton.icon(
+                                onPressed: () => _playMovie(title),
+                                icon: const Icon(
+                                  Icons.play_arrow_rounded,
+                                  size: 20,
+                                ),
+                                label: const Text('Play movie'),
+                              ),
+                            if (title.isMovie) const SizedBox(width: 8),
+                            Container(
+                              height: 32,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: MusicoPalette.glassStrong,
+                                ),
+                              ),
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<String>(
+                                  value: _embedProvider,
+                                  isDense: true,
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                  iconSize: 18,
+                                  borderRadius: BorderRadius.circular(12),
+                                  items: const [
+                                    DropdownMenuItem(
+                                      value: 'auto',
+                                      child: Text('Auto'),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: 'vidlink',
+                                      child: Text('VidLink'),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: 'vidcore',
+                                      child: Text('VidCore'),
+                                    ),
+                                    DropdownMenuItem(
+                                      value: 'peachify',
+                                      child: Text('Peachify'),
+                                    ),
+                                  ],
+                                  onChanged: (value) {
+                                    if (value != null) {
+                                      setState(() => _embedProvider = value);
+                                    }
+                                  },
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (!title.isMovie && _loadingTitle)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 8),
+                            child: Text('Loading episodes…'),
+                          )
+                        else if (!title.isMovie && _titleError != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text(
+                              _titleError!,
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
+          if (title.isSeries && _seasons.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 14, 18, 6),
+              child: SizedBox(
+                height: 36,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _seasons.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 7),
+                  itemBuilder: (context, index) {
+                    final season = _seasons[index];
+                    final selected = _season == season;
+                    return ChoiceChip(
+                      label: Text('Season $season'),
+                      selected: selected,
+                      onSelected: (_) => setState(() => _season = season),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+          _buildEpisodes(context, title),
         ],
-        _buildEpisodes(context, title),
-      ],
-    ),
+      ),
     );
   }
 
@@ -3128,14 +3265,22 @@ class _ManualEpisodePickerState extends State<_ManualEpisodePicker> {
 }
 
 class _WatchResultCard extends StatelessWidget {
-  const _WatchResultCard({required this.title, required this.onTap});
+  const _WatchResultCard({
+    required this.title,
+    required this.isSaved,
+    required this.onTap,
+    required this.onWatchlistTap,
+  });
 
   final WatchTitle title;
+  final bool isSaved;
   final VoidCallback onTap;
+  final VoidCallback onWatchlistTap;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(mouseCursor: SystemMouseCursors.click,
+    return InkWell(
+      mouseCursor: SystemMouseCursors.click,
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
       child: Column(
@@ -3175,6 +3320,14 @@ class _WatchResultCard extends StatelessWidget {
                   ),
                 ),
               ),
+              Positioned(
+                top: 6,
+                right: 6,
+                child: _WatchlistPosterButton(
+                  isSaved: isSaved,
+                  onPressed: onWatchlistTap,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 8),
@@ -3195,4 +3348,39 @@ class _WatchResultCard extends StatelessWidget {
       ),
     );
   }
+}
+
+MediaTitle _watchlistMediaForTitle(WatchTitle title) => MediaTitle(
+  id: title.tmdbId ?? title.imdbId.hashCode,
+  title: title.title,
+  status: 'FINISHED',
+  season: null,
+  format: title.isSeries ? 'TV' : 'MOVIE',
+  seasonYear: title.year,
+  imageUrl: title.posterUrl,
+  genres: const [],
+  startDate: null,
+  episodes: null,
+  airings: const [],
+);
+
+class _WatchlistPosterButton extends StatelessWidget {
+  const _WatchlistPosterButton({
+    required this.isSaved,
+    required this.onPressed,
+  });
+
+  final bool isSaved;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => IconButton.filledTonal(
+    tooltip: isSaved ? 'Remove from watchlist' : 'Add to watchlist',
+    onPressed: onPressed,
+    style: IconButton.styleFrom(
+      backgroundColor: MusicoPalette.paper.withValues(alpha: .94),
+      foregroundColor: isSaved ? MusicoPalette.terracotta : MusicoPalette.ink,
+    ),
+    icon: Icon(isSaved ? Icons.bookmark_rounded : Icons.bookmark_add_outlined),
+  );
 }
