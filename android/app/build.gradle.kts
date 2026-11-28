@@ -25,9 +25,9 @@ android {
     signingConfigs {
         create("release") {
             storeFile = file("musico-release.jks")
-            storePassword = "musico123"
+            storePassword = System.getenv("MUSICO_RELEASE_STORE_PASSWORD") ?: ""
             keyAlias = "musico"
-            keyPassword = "musico123"
+            keyPassword = System.getenv("MUSICO_RELEASE_KEY_PASSWORD") ?: ""
         }
     }
 
