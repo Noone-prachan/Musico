@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/gestures.dart' show kBackMouseButton, PointerDeviceKind;
 import 'package:flutter/services.dart';
 
 import 'package:material_ui/material_ui.dart';
@@ -501,8 +502,27 @@ class MusicoApp extends StatelessWidget {
     title: 'Musico',
     debugShowCheckedModeBanner: false,
     theme: MusicoTheme.light,
+    navigatorKey: _musicoNavigatorKey,
+    builder: (context, child) => Listener(
+      onPointerDown: _handleMouseBack,
+      child: child ?? const SizedBox.shrink(),
+    ),
     home: const AuroraBackground(child: _MusicoHome()),
   );
+}
+
+final _musicoNavigatorKey = GlobalKey<NavigatorState>();
+
+void _handleMouseBack(PointerDownEvent event) {
+  if (event.kind != PointerDeviceKind.mouse ||
+      (event.buttons & kBackMouseButton) == 0) {
+    return;
+  }
+  unawaited(_popMusicoRoute());
+}
+
+Future<void> _popMusicoRoute() async {
+  await _musicoNavigatorKey.currentState?.maybePop<void>();
 }
 
 class _MusicoHome extends StatefulWidget {
